@@ -2,6 +2,14 @@ import matplotlib.pyplot as plt
 from IPython.core.debugger import set_trace
 import copy
 import numpy as np
+"""
+
+To do:
+
+- replace the lists l_xaxis, l_yaxis, and l_styles with a single list
+  of objects of class `Curve`, which must be created.
+
+"""
 
 
 class GFigure:
@@ -41,9 +49,12 @@ class GFigure:
         self.xlabel = xlabel
         self.ylabel = ylabel
 
-        # Each entry of l_xaxis or l_yaxis is a list.
+        # Each entry of l_xaxis or l_yaxis is a list of a numerical type.
         self.l_xaxis, self.l_yaxis = GFigure._list_from_axis_arguments(
             xaxis, yaxis)
+
+        # `self.l_styles` is a list of strings with the same length as `self.l_axis`
+        self.l_styles = [None] * len(self.l_yaxis)
 
         self.legend = copy.copy(legend)
 
@@ -94,14 +105,13 @@ class GFigure:
             else:
                 raise TypeError
 
-
         l_xaxis = unify_format(xaxis_arg)
         l_yaxis = unify_format(yaxis_arg)
         #set_trace()
 
         str_message = "Number of curves in the xaxis must be 1 or equal to the number of curves in tye yaxis"
-        if len(l_xaxis)==0 and len(l_yaxis)>0:
-            l_xaxis = [[]] 
+        if len(l_xaxis) == 0 and len(l_yaxis) > 0:
+            l_xaxis = [[]]
         if len(l_yaxis) > 1:
             if len(l_xaxis) == 1:
                 l_xaxis = l_xaxis * len(l_yaxis)
@@ -113,13 +123,15 @@ class GFigure:
 
         return l_xaxis, l_yaxis
 
-    def add_curve(self, *in_args):
-        """
-        Syntax:
+    def add_curve(self, *in_args, style=None):
+        """Syntax:
 
-        obj.add_curve(xaxis, yaxis)
+        obj.add_curve(xaxis, yaxis, style=None)
 
-        obj.add_curve(yaxis)
+        obj.add_curve(yaxis, style=None)
+
+        Input `style` is used when ivoking plt.plot(). None leaves the
+        default format chosen by plt.plot(). 
 
         """
 
@@ -137,28 +149,32 @@ class GFigure:
         self.l_xaxis += l_additional_xaxis
         self.l_yaxis += l_additional_yaxis
 
+        if style is not None:
+            assert type(style) == str
+        self.l_styles.append(style)
 
-        
     def plot(self):
 
         F = plt.figure()
         assert (len(self.l_xaxis) == len(self.l_yaxis))
+        assert (len(self.l_yaxis) == len(self.l_styles))
 
         for index in range(0, len(self.l_yaxis)):
-            self.plot_curve(self.l_xaxis[index], self.l_yaxis[index])
+            self.plot_curve(self.l_xaxis[index], self.l_yaxis[index],
+                            self.l_styles[index])
 
         plt.legend(tuple(self.legend))
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
 
         return F
-        
 
-    def plot_curve(self, l_xaxis, l_yaxis):
-        """
-        l_xaxis and l_yaxis are lists of a numeric type. If l_axis is empty, the default is used.
+    def plot_curve(self, l_xaxis, l_yaxis, style):
+        """l_xaxis and l_yaxis are lists of a numeric type. If l_axis is
+        empty, the default is used.
+
         """
         if len(l_xaxis):
-            plt.plot(l_axis,l_yaxis)
+            plt.plot(l_xaxis, l_yaxis, style)
         else:
-            plt.plot(l_yaxis)
+            plt.plot(l_yaxis, style)
