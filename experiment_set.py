@@ -25,17 +25,20 @@ class AbstractExperimentSet:
         if f_name in dir(cls):
             start_time = datetime.now()
             print("Running experiment %s" % experiment_id)
-            G = getattr(cls, f_name)(l_args)
+            l_G = getattr(cls, f_name)(l_args)
             end_time = datetime.now()
             AbstractExperimentSet.print_time(start_time, end_time)
-            if type(G) == GFigure or (type(G) == list
-                                      and type(G[0]) == GFigure):
-                # set_trace()
-                cls.store_fig(G, f_name)
+
+            # l_G must be a GFigure or list of GFigure
+            if type(l_G) == GFigure:
+                l_G = [l_G]
+            if not (type(l_G) == list and type(l_G[0]) == GFigure):
+                raise Exception("Function %s returns an unexpected type" % f_name)
+
+            cls.store_fig(l_G, f_name)
+            for G in l_G:
                 G.plot()
-                plt.show()
-            else:
-                print("No figures to show")
+            plt.show()
 
         else:
             raise Exception("Experiment not found")
@@ -76,7 +79,7 @@ class AbstractExperimentSet:
         return OUTPUT_DATA_FOLDER + cls.__module__.split(".")[-1] + os.sep
 
     @classmethod
-    def store_fig(cls, G, f_name):
+    def store_fig(cls, l_G, f_name):
 
         # Create the folder if it does not exist
         if not os.path.isdir(OUTPUT_DATA_FOLDER):
@@ -85,14 +88,6 @@ class AbstractExperimentSet:
         if not os.path.isdir(target_folder):
             os.mkdir(target_folder)
         file_name = f_name + ".pk"
-
-        # Unify format
-        if type(G) == GFigure:
-            l_G = [G]
-        elif (type(G) == list) and (type(G[0]) == GFigure):
-            l_G = G
-        else:
-            raise Exception("Function %s returns an unexpected type" % f_name)
 
         pickle.dump(l_G, open(target_folder + file_name, "wb"))
 
