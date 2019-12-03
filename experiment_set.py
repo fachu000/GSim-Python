@@ -89,6 +89,7 @@ class AbstractExperimentSet:
             os.mkdir(target_folder)
         file_name = f_name + ".pk"
 
+        print("Storing figure as %s" % target_folder + file_name)
         pickle.dump(l_G, open(target_folder + file_name, "wb"))
 
     @classmethod

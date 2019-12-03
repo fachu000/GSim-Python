@@ -46,27 +46,33 @@ class Curve:
 
         if type(self.xaxis) == list and len(self.xaxis):
             if self.style:
-                plt.plot(self.xaxis, self.yaxis, self.style)
+                plt.plot(self.xaxis, self.yaxis, self.style, label=self.legend_str)
             else:
-                plt.plot(self.xaxis, self.yaxis)
+                plt.plot(self.xaxis, self.yaxis, label=self.legend_str)
         else:
             if self.style:
-                plt.plot(self.yaxis, self.style)
+                plt.plot(self.yaxis, self.style, label=self.legend_str)
             else:
-                plt.plot(self.yaxis)
+                plt.plot(self.yaxis, label=self.legend_str)
 
-    def list_to_legend(l_curves):
+    def legend_is_empty(l_curves):
 
-        b_empty_legend = True
         for curve in l_curves:
             if curve.legend_str != "":
-                b_empty_legend = False
-                break
+                return False
+        return True
 
-        if b_empty_legend:
-            return tuple([])
-        else:
-            return tuple([curve.legend_str for curve in l_curves])
+
+    #     b_empty_legend = True
+    #     for curve in l_curves:
+    #         if curve.legend_str != "":
+    #             b_empty_legend = False
+    #             break
+
+    #     if b_empty_legend:
+    #         return tuple([])
+    #     else:
+    #         return tuple([curve.legend_str for curve in l_curves])
 
 
 class GFigure:
@@ -111,7 +117,8 @@ class GFigure:
             - list of str : then style[n] is applied to the n-th curve. Its length
               must be at least the number of curves.
 
-        legend : str, tuple of str, or list of str
+        legend : str, tuple of str, or list of str. If the str begins with "_", then
+            that curve is not included in the legend.
 
         """
 
@@ -281,7 +288,9 @@ class GFigure:
         for curve in self.l_curves:
             curve.plot()
 
-        plt.legend(Curve.list_to_legend(self.l_curves))
+#        plt.legend(Curve.list_to_legend(self.l_curves))
+        if not Curve.legend_is_empty(self.l_curves):
+            plt.legend()
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
         if self.title:
