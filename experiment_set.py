@@ -30,15 +30,18 @@ class AbstractExperimentSet:
             AbstractExperimentSet.print_time(start_time, end_time)
 
             # l_G must be a GFigure or list of GFigure
-            if type(l_G) == GFigure:
-                l_G = [l_G]
-            if not (type(l_G) == list and type(l_G[0]) == GFigure):
-                raise Exception("Function %s returns an unexpected type" % f_name)
+            if l_G is None:
+                print("The experiment returned no GFigures")
+            else:
+                if type(l_G) == GFigure:
+                    l_G = [l_G]
+                if not (type(l_G) == list and type(l_G[0]) == GFigure):
+                    raise Exception("Function %s returns an unexpected type" % f_name)
 
-            cls.store_fig(l_G, f_name)
-            for G in l_G:
-                G.plot()
-            plt.show()
+                cls.store_fig(l_G, f_name)
+                for G in l_G:
+                    G.plot()
+                plt.show()
 
         else:
             raise Exception("Experiment not found")
