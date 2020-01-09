@@ -29,31 +29,48 @@ class AbstractExperimentSet:
             end_time = datetime.now()
             AbstractExperimentSet.print_time(start_time, end_time)
 
-            # l_G must be a GFigure or list of GFigure
+            # Set l_G to be a (possibly empty) list of GFigure
             if l_G is None:
-                print("The experiment returned no GFigures")
-            else:
-                if type(l_G) == GFigure:
-                    l_G = [l_G]
-                if not (type(l_G) == list and type(l_G[0]) == GFigure):
-                    raise Exception("Function %s returns an unexpected type" % f_name)
+                """In this case we store an emtpy list. Otherwise, it is not possible
+                to know whether there are no figures because the experiment has not
+                been run before or because the experiment produces no figures."""
+                l_G = []
+            if type(l_G) == GFigure:
+                l_G = [l_G]
+            # From this point on, l_G must be a list of GFigure
+            if (type(l_G) != list) or (len(l_G) > 0
+                                       and type(l_G[0]) != GFigure):
+                raise Exception("""Function %s returns an unexpected type.
+                       It must return either None, a GFigure object,
+                       or a list of GFigure objects""" % f_name)
 
-                cls.store_fig(l_G, f_name)
-                for G in l_G:
-                    G.plot()
-                plt.show()
+            # Store and plot
+            cls.store_fig(l_G, f_name)
+            cls.plot_list_of_GFigure(l_G)
 
         else:
             raise Exception("Experiment not found")
+
+    @classmethod
+    def plot_list_of_GFigure(cls, l_G):
+        if len(l_G) == 0:
+            print("The experiment returned no GFigures")
+        else:
+            for G in l_G:
+                G.plot()
+            plt.show()
 
     @classmethod
     def plot_only(cls, experiment_id):
 
         f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
         l_G = cls.load_fig(f_name)
-        for G in l_G:
-            G.plot()
-        plt.show()
+        if l_G is None:  # There is no data for this experiment.
+            print(
+                "The experiment %s does not exist or has not been run before."
+                % experiment_id)
+        else:
+            cls.plot_list_of_GFigure(l_G)
 
     def print_time(start_time, end_time):
         td = end_time - start_time
