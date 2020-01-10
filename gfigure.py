@@ -5,7 +5,8 @@ import copy
 import numpy as np
 """
 
-
+The easiest way to learn how to use this module is to run the examples
+at the end.
 
 """
 
@@ -79,11 +80,7 @@ class Curve:
 
 
 class Subplot:
-    def __init__(self,
-                 title="",
-                 xlabel="",
-                 ylabel="",
-                 **kwargs):
+    def __init__(self, title="", xlabel="", ylabel="", **kwargs):
         """
         For a description of the arguments, see GFigure.
         
@@ -97,6 +94,9 @@ class Subplot:
         self.l_curves = []
         self.add_curve(**kwargs)
 
+    def is_empty(self):
+
+        return not any([self.title, self.xlabel, self.ylabel, self.l_curves])
 
     def update_properties(self, **kwargs):
 
@@ -107,18 +107,16 @@ class Subplot:
         if "ylabel" in kwargs:
             self.ylabel = kwargs["ylabel"]
 
-
-        
     def add_curve(self, xaxis=[], yaxis=[], styles=[], legend=tuple()):
         """
 
         """
 
-        self.l_curves += Subplot._l_curve_from_input_args(xaxis, yaxis, styles,
-                                                       legend)
+        self.l_curves += Subplot._l_curve_from_input_args(
+            xaxis, yaxis, styles, legend)
 
-        
     def _l_curve_from_input_args(xaxis, yaxis, styles, legend):
+
         # Process the subplot input.  Each entry of l_xaxis or l_yaxis is
         # a list of a numerical type. Both lists will have the same length.
         l_xaxis, l_yaxis = Subplot._list_from_axis_arguments(xaxis, yaxis)
@@ -194,7 +192,10 @@ class Subplot:
             raise TypeError(err_msg)
 
     def is_number(num):
-        return isinstance(num, (int, float, complex, bool))
+        #return isinstance(num, (int, float, complex, bool))
+        # From https://stackoverflow.com/questions/500328/identifying-numeric-and-array-types-in-numpy
+        attrs = ['__add__', '__sub__', '__mul__', '__truediv__', '__pow__']
+        return all(hasattr(num, attr) for attr in attrs)
 
     def _list_from_axis_arguments(xaxis_arg, yaxis_arg):
         """Processes subplot arguments and returns two lists of the same length
@@ -249,7 +250,7 @@ class Subplot:
 
         # Expand lists if needed to have the same length
         str_message = "Number of curves in the xaxis must be"\
-            " 1 or equal to the number of curves in tye yaxis"
+            " 1 or equal to the number of curves in the y axis"
         if len(l_xaxis) > 0 and len(l_yaxis) != len(l_xaxis):
             raise Exception(str_message)
         if len(l_xaxis) == 0 and len(l_yaxis) > 0:
@@ -265,9 +266,8 @@ class Subplot:
 
         return l_xaxis, l_yaxis
 
-
     def plot(self):
-        
+
         for curve in self.l_curves:
             curve.plot()
 
@@ -280,7 +280,7 @@ class Subplot:
         if self.title:
             plt.title(self.title)
 
-        return 
+        return
 
 
 class GFigure:
@@ -355,26 +355,21 @@ class GFigure:
         """
 
         new_subplot = Subplot(*args, **kwargs)
-#        set_trace()
+        #        set_trace()
         self.ind_active_subplot = ind_active_subplot
-        
+
         # List of axes to create subplots
-        self.l_subplots = [None]*(self.ind_active_subplot+1)
-        self.l_subplots[self.ind_active_subplot] = new_subplot
+        # self.l_subplots = [None] * (self.ind_active_subplot + 1)
+        # self.l_subplots[self.ind_active_subplot] = new_subplot
+        if not new_subplot.is_empty():
+            # List of axes to create subplots
+            self.l_subplots = [None]*(self.ind_active_subplot+1)
+            self.l_subplots[self.ind_active_subplot] = new_subplot
+        else:
+            self.l_subplots = []
 
-
-        # Older code:
-        # if new_subplot.l_curves:
-        #     # List of axes to create subplots
-        #     self.l_subplots = [None]*(self.ind_active_subplot+1)
-        #     self.l_subplots[self.ind_active_subplot] = new_subplot
-        # else:
-        #     self.l_subplots = []
-
-            
-        self.num_subplot_rows=num_subplot_rows
-        self.num_subplot_columns=num_subplot_columns
-
+        self.num_subplot_rows = num_subplot_rows
+        self.num_subplot_columns = num_subplot_columns
 
     def add_curve(self, *args, ind_active_subplot=None, **kwargs):
         """
@@ -387,19 +382,15 @@ class GFigure:
         if ind_active_subplot is not None:
             self.ind_active_subplot = ind_active_subplot
 
-
         self.select_subplot(self.ind_active_subplot, **kwargs)
         self.l_subplots[self.ind_active_subplot].add_curve(*args, **kwargs)
-        
-            
-            
+
     def next_subplot(self, **kwargs):
         # Creates a new subplot at the end of the list of axes. One can
         # specify subplot parameters; see GFigure.
         self.ind_active_subplot = len(self.l_subplots)
         if kwargs:
-            self.l_subplots.append( Subplot(**kwargs) )
-
+            self.l_subplots.append(Subplot(**kwargs))
 
     def select_subplot(self, ind_subplot, **kwargs):
         # Creates the `ind_subplot`-th subplot if it does not exist and
@@ -407,57 +398,53 @@ class GFigure:
         # see GFigure.
 
         self.ind_active_subplot = ind_subplot
-        
+
         # Complete the list l_subplots if index self.ind_active_subplot does
         # not exist.
         if ind_subplot >= len(self.l_subplots):
-            self.l_subplots+=[None]*(self.ind_active_subplot-len(self.l_subplots)+1)
+            self.l_subplots += [None] * (self.ind_active_subplot -
+                                         len(self.l_subplots) + 1)
 
         # Create if it does not exist
         if self.l_subplots[self.ind_active_subplot] is None:
             self.l_subplots[self.ind_active_subplot] = Subplot(**kwargs)
         else:
-            self.l_subplots[self.ind_active_subplot].update_properties(**kwargs)
+            self.l_subplots[self.ind_active_subplot].update_properties(
+                **kwargs)
 
-        
-
-        
     def plot(self):
 
         F = plt.figure()
 
         num_axes = len(self.l_subplots)
         if self.num_subplot_rows is not None:
-            self.num_subplot_columns =  int(np.ceil(num_axes/self.num_subplot_rows))
-        else: # self.num_subplot_rows is None
+            self.num_subplot_columns = int(
+                np.ceil(num_axes / self.num_subplot_rows))
+        else:  # self.num_subplot_rows is None
             if self.num_subplot_columns is None:
                 # Both are None. Just arrange thhe plots as a column
                 self.num_subplot_columns = 1
                 self.num_subplot_rows = num_axes
             else:
-                self.num_subplot_rows = int(np.ceil(num_axes/self.num_subplot_columns))
-                
+                self.num_subplot_rows = int(
+                    np.ceil(num_axes / self.num_subplot_columns))
 
         for index, subplot in enumerate(self.l_subplots):
-            plt.subplot(
-                self.num_subplot_rows,
-                self.num_subplot_columns,
-                index+1)
+            plt.subplot(self.num_subplot_rows, self.num_subplot_columns,
+                        index + 1)
             if self.l_subplots[index] is not None:
                 self.l_subplots[index].plot()
 
         return F
 
 
-
-
 def example_figures(ind_example):
 
-    v_x = np.linspace(0,10,20)
-    v_y1 = v_x**2 -v_x + 3
-    v_y2 = v_x**2 +v_x + 3
-    v_y3 = v_x**2 -2*v_x -10
-    
+    v_x = np.linspace(0, 10, 20)
+    v_y1 = v_x**2 - v_x + 3
+    v_y2 = v_x**2 + v_x + 3
+    v_y3 = v_x**2 - 2 * v_x - 10
+
     if ind_example == 1:
         # Example with a single curve, single subplot
         G = GFigure(xaxis=v_x,
@@ -465,8 +452,7 @@ def example_figures(ind_example):
                     xlabel="x",
                     ylabel="f(x)",
                     title="Parabolas",
-                    legend="P1"
-        )
+                    legend="P1")
     elif ind_example == 2:
         # Example with three curves on one subplot
         G = GFigure(xaxis=v_x,
@@ -474,63 +460,68 @@ def example_figures(ind_example):
                     xlabel="x",
                     ylabel="f(x)",
                     title="Parabolas",
-                    legend="P1"
-        )
-        G.add_curve(xaxis=v_x,
-                    yaxis=v_y2,
-                    legend="P2"
-        )
-        G.add_curve(xaxis=v_x,
-                    yaxis=v_y3,
-                    legend="P3"
-        )
+                    legend="P1")
+        G.add_curve(xaxis=v_x, yaxis=v_y2, legend="P2")
+        G.add_curve(xaxis=v_x, yaxis=v_y3, legend="P3")
     elif ind_example == 3:
+        # Typical scheme where a simulation function produces each
+        # curve.
+        def my_simulation():
+            coef = np.random.random()
+            v_y_new = coef*v_y1
+            G.add_curve(xaxis=v_x, yaxis=v_y_new, legend="coef = %.2f"%coef)
+
+        """ One can specify the axis labels and title when the figure is
+        created."""        
+        G = GFigure(xlabel="x", ylabel="f(x)", title="Parabola") 
+        for ind in range(0, 6):
+            my_simulation()
+    elif ind_example == 4:
         # Example with two subplots
         G = GFigure(xaxis=v_x,
                     yaxis=v_y1,
                     xlabel="x",
                     ylabel="f(x)",
                     title="Parabolas",
-                    legend="P1"
-        )
-        G.add_curve(xaxis=v_x,
-                    yaxis=v_y2,
-                    legend="P2"
-        )
+                    legend="P1")
+        G.add_curve(xaxis=v_x, yaxis=v_y2, legend="P2")
         G.next_subplot(xlabel="x")
-        G.add_curve(xaxis=v_x,
-                    yaxis=v_y3,
-                    legend="P3",
-        )    
-    elif ind_example == 4:
+        G.add_curve(
+            xaxis=v_x,
+            yaxis=v_y3,
+            legend="P3",
+        )
+    elif ind_example == 5:
         # Example with a large multiplot
         G = GFigure(num_subplot_rows=4)
-        for ind in range(0,12):
-            G.select_subplot(
-                ind,
-                xlabel="x",
-                ylabel="f(x)",
-                title="Parabolas"
-            )
-            G.add_curve(
-                xaxis=v_x,
-                yaxis=v_y1,
-                legend="P1",
-                styles="r"                
-            )
+        for ind in range(0, 12):
+            G.select_subplot(ind, xlabel="x", ylabel="f(x)", title="Parabolas")
+            G.add_curve(xaxis=v_x, yaxis=v_y1, legend="P1", styles="r")
+    elif ind_example == 6:
+        # Typical scheme where a simulation function produces each subplot
+        def my_simulation():
+            G.next_subplot(xlabel="x", ylabel="f(x)", title="Parabola")
+            G.add_curve(xaxis=v_x, yaxis=v_y1, legend="P1", styles="r")
+
+        """ Important not to specify axis labels or the title in the next line
+        because that would create an initial subplot without curves
+        and, therefore, function `next_subplot` will move to the
+        second subplot of the figure the first time `my_simulation` is
+        executed."""
+        
+        G = GFigure(num_subplot_rows=3) 
+        for ind in range(0, 6):
+            my_simulation()
 
     G.plot()
     plt.show()
 
 
-if __name__=='__main__':
+if __name__ == '__main__':
     if len(sys.argv) != 2:
-        print(
-"""Usage from command line: 
+        print("""Usage from command line: 
 $ python3 gfigure.py <example_index>
             
-where <example_index> is an integer. See function `example_figures`."""
-            )
+where <example_index> is an integer. See function `example_figures`.""")
     else:
         example_figures(int(sys.argv[1]))
-    
