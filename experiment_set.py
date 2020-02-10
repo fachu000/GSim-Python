@@ -45,20 +45,20 @@ class AbstractExperimentSet:
                        or a list of GFigure objects""" % f_name)
 
             # Store and plot
-            cls.store_fig(l_G, f_name)
-            cls.plot_list_of_GFigure(l_G)
+            if len(l_G) == 0:
+                print("The experiment returned no GFigures")
+            else:
+                cls.store_fig(l_G, f_name)
+                cls.plot_list_of_GFigure(l_G)
 
         else:
             raise Exception("Experiment not found")
 
     @classmethod
     def plot_list_of_GFigure(cls, l_G):
-        if len(l_G) == 0:
-            print("The experiment returned no GFigures")
-        else:
-            for G in l_G:
-                G.plot()
-            plt.show()
+        for G in l_G:
+            G.plot()
+        plt.show()
 
     @classmethod
     def plot_only(cls, experiment_id):
