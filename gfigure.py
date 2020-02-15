@@ -80,7 +80,7 @@ class Curve:
 
 
 class Subplot:
-    def __init__(self, title="", xlabel="", ylabel="", **kwargs):
+    def __init__(self, title="", xlabel="", ylabel="", grid=True, xlim=None, ylim=None, **kwargs):
         """
         For a description of the arguments, see GFigure.
         
@@ -89,6 +89,9 @@ class Subplot:
         self.title = title
         self.xlabel = xlabel
         self.ylabel = ylabel
+        self.grid = grid
+        self.xlim = xlim
+        self.ylim = ylim
 
         #    self.l_curves = Subplot._l_curve_from_input_args(xaxis, yaxis, styles,                                                      legend)
         self.l_curves = []
@@ -280,6 +283,17 @@ class Subplot:
         if self.title:
             plt.title(self.title)
 
+        if "grid" in dir(self): # backwards compatibility
+            plt.grid(self.grid)
+
+        if "xlim" in dir(self): # backwards compatibility
+            if self.xlim:
+                plt.xlim(self.xlim)
+
+        if "ylim" in dir(self): # backwards compatibility
+            if self.ylim:
+                plt.ylim(self.ylim)
+            
         return
 
 
@@ -304,6 +318,12 @@ class GFigure:
         xlabel : str
 
         ylabel : str
+
+        grid : bool
+
+        xlim : tuple
+
+        ylim : tuple
 
         CURVE ARGUMENTS:
 
