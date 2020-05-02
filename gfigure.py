@@ -300,6 +300,7 @@ class Subplot:
 class GFigure:
     def __init__(self,
                  *args,
+                 figsize=None,
                  ind_active_subplot=0,
                  num_subplot_rows=None,
                  num_subplot_columns=1,
@@ -390,6 +391,7 @@ class GFigure:
 
         self.num_subplot_rows = num_subplot_rows
         self.num_subplot_columns = num_subplot_columns
+        self.figsize = figsize
 
     def add_curve(self, *args, ind_active_subplot=None, **kwargs):
         """
@@ -434,8 +436,15 @@ class GFigure:
 
     def plot(self):
 
-        F = plt.figure()
+        # backwards compatibility
+        if "figsize" not in dir(self):
+            figsize = None
+        else:
+            figsize = self.figsize
 
+        F = plt.figure(figsize=figsize)
+        #plt.tight_layout()
+        
         num_axes = len(self.l_subplots)
         if self.num_subplot_rows is not None:
             self.num_subplot_columns = int(
@@ -455,7 +464,10 @@ class GFigure:
             if self.l_subplots[index] is not None:
                 self.l_subplots[index].plot()
 
+
+        
         return F
+        
 
 
 def example_figures(ind_example):

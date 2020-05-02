@@ -55,13 +55,33 @@ class AbstractExperimentSet:
             raise Exception("Experiment not found")
 
     @classmethod
-    def plot_list_of_GFigure(cls, l_G):
-        for G in l_G:
+    def plot_list_of_GFigure(cls, l_G, save_pdf=False, experiment_id=None):
+
+        if save_pdf:
+            assert experiment_id
+            
+            f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
+            
+            # Create the folder if it does not exist
+            if not os.path.isdir(OUTPUT_DATA_FOLDER):
+                os.mkdir(OUTPUT_DATA_FOLDER)
+            target_folder = cls.experiment_set_data_folder()
+            if not os.path.isdir(target_folder):
+                os.mkdir(target_folder)
+        
+        for ind, G in enumerate(l_G):
             G.plot()
+            if save_pdf:
+                if len(l_G)>1:
+                    file_name = f_name + "-" + str(ind) + ".pdf"
+                else:
+                    file_name = f_name + ".pdf"
+                print(f"Saving figure as {target_folder + file_name}")
+                plt.savefig(target_folder + file_name)
         plt.show()
 
     @classmethod
-    def plot_only(cls, experiment_id):
+    def plot_only(cls, experiment_id, save_pdf=False):
 
         f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
         l_G = cls.load_fig(f_name)
@@ -70,7 +90,7 @@ class AbstractExperimentSet:
                 "The experiment %s does not exist or has not been run before."
                 % experiment_id)
         else:
-            cls.plot_list_of_GFigure(l_G)
+            cls.plot_list_of_GFigure(l_G, save_pdf=save_pdf, experiment_id=experiment_id)
 
     def print_time(start_time, end_time):
         td = end_time - start_time
