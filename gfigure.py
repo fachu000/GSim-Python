@@ -215,8 +215,12 @@ class Subplot:
                     return [[arr[row, col] for col in range(0, arr.shape[1])]
                             for row in range(0, arr.shape[0])]
                 else:
-                    raise TypeError
+                    raise ValueError("Input arrays need to be of dimension 1 or 2")
 
+            # Compatibility with TensorFlow
+            if hasattr(axis, "numpy"):
+                axis = axis.numpy()
+                
             if (type(axis) == np.ndarray):
                 return ndarray_to_list(axis)
             elif (type(axis) == list):
@@ -227,6 +231,10 @@ class Subplot:
                 else:
                     out_list = []
                     for entry in axis:
+                        # Compatibility with TensorFlow
+                        if hasattr(entry, "numpy"):
+                            entry = entry.numpy()
+                            
                         if type(entry) == np.ndarray:
                             if entry.ndim == 1:
                                 out_list.append(copy.copy(entry))
@@ -251,7 +259,7 @@ class Subplot:
         l_xaxis = unify_format(xaxis_arg)
         l_yaxis = unify_format(yaxis_arg)
 
-        # Expand lists if needed to have the same length
+        # Expand (broadcast) lists to have the same length
         str_message = "Number of curves in the xaxis must be"\
             " 1 or equal to the number of curves in the y axis"
         if len(l_xaxis) > 0 and len(l_yaxis) != len(l_xaxis):
@@ -330,16 +338,16 @@ class GFigure:
 
         xaxis and yaxis:
             (a) To specify only one curve:
-                - `yaxis` can be a list of a numeric type or 1D np.ndarray
+                - `yaxis` can be a 1D np.ndarray or a list of a numeric type 
                 - `xaxis` can be None, a list of a numeric type, or a 1D 
                 np.array of the same length as `yaxis`.
             (b) To specify one or more curves:
                 - `yaxis` can be:
-                    -> a list of the types specified in (a)
+                    -> a list whose elements are as described in (a)
                     -> M x N np.ndarray. Each row corresponds to a curve.
                 - `xaxis` can be either as in (a), so all curves share the same 
                 X-axis points, or
-                    -> a list of the types specified in (a)
+                    -> a list whose elements are as described in (a)
                     -> Mx x N np.ndarray. Each row corresponds to a curve. Mx 
                     must be either M or 1. 
 
