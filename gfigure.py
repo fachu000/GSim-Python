@@ -80,7 +80,14 @@ class Curve:
 
 
 class Subplot:
-    def __init__(self, title="", xlabel="", ylabel="", grid=True, xlim=None, ylim=None, **kwargs):
+    def __init__(self,
+                 title="",
+                 xlabel="",
+                 ylabel="",
+                 grid=True,
+                 xlim=None,
+                 ylim=None,
+                 **kwargs):
         """
         For a description of the arguments, see GFigure.
         
@@ -215,12 +222,13 @@ class Subplot:
                     return [[arr[row, col] for col in range(0, arr.shape[1])]
                             for row in range(0, arr.shape[0])]
                 else:
-                    raise ValueError("Input arrays need to be of dimension 1 or 2")
+                    raise ValueError(
+                        "Input arrays need to be of dimension 1 or 2")
 
             # Compatibility with TensorFlow
             if hasattr(axis, "numpy"):
                 axis = axis.numpy()
-                
+
             if (type(axis) == np.ndarray):
                 return ndarray_to_list(axis)
             elif (type(axis) == list):
@@ -234,7 +242,7 @@ class Subplot:
                         # Compatibility with TensorFlow
                         if hasattr(entry, "numpy"):
                             entry = entry.numpy()
-                            
+
                         if type(entry) == np.ndarray:
                             if entry.ndim == 1:
                                 out_list.append(copy.copy(entry))
@@ -291,17 +299,17 @@ class Subplot:
         if self.title:
             plt.title(self.title)
 
-        if "grid" in dir(self): # backwards compatibility
+        if "grid" in dir(self):  # backwards compatibility
             plt.grid(self.grid)
 
-        if "xlim" in dir(self): # backwards compatibility
+        if "xlim" in dir(self):  # backwards compatibility
             if self.xlim:
                 plt.xlim(self.xlim)
 
-        if "ylim" in dir(self): # backwards compatibility
+        if "ylim" in dir(self):  # backwards compatibility
             if self.ylim:
                 plt.ylim(self.ylim)
-            
+
         return
 
 
@@ -312,6 +320,7 @@ class GFigure:
                  ind_active_subplot=0,
                  num_subplot_rows=None,
                  num_subplot_columns=1,
+                 layout="",
                  **kwargs):
         """Arguments of mutable types are (deep) copied so they can be
         modified by the user after constructing the GFigure object
@@ -381,6 +390,11 @@ class GFigure:
             The values of the properties of GFigure with the same name
             can be specified subsequently.
 
+        LAYOUT
+
+        `layout`: can be "", "tight", or "constrained". See pyplot
+        documentation.
+
         """
 
         new_subplot = Subplot(*args, **kwargs)
@@ -392,7 +406,7 @@ class GFigure:
         # self.l_subplots[self.ind_active_subplot] = new_subplot
         if not new_subplot.is_empty():
             # List of axes to create subplots
-            self.l_subplots = [None]*(self.ind_active_subplot+1)
+            self.l_subplots = [None] * (self.ind_active_subplot + 1)
             self.l_subplots[self.ind_active_subplot] = new_subplot
         else:
             self.l_subplots = []
@@ -400,6 +414,13 @@ class GFigure:
         self.num_subplot_rows = num_subplot_rows
         self.num_subplot_columns = num_subplot_columns
         self.figsize = figsize
+
+        if layout == "" or layout == "tight":
+            self.layout = layout
+        else:
+            raise ValueError("Invalid value of argument `layout`")
+
+
 
     def add_curve(self, *args, ind_active_subplot=None, **kwargs):
         """
@@ -452,7 +473,7 @@ class GFigure:
 
         F = plt.figure(figsize=figsize)
         #plt.tight_layout()
-        
+
         num_axes = len(self.l_subplots)
         if self.num_subplot_rows is not None:
             self.num_subplot_columns = int(
@@ -472,11 +493,40 @@ class GFigure:
             if self.l_subplots[index] is not None:
                 self.l_subplots[index].plot()
 
+        # Layout
+        if self.layout == "":
+            pass
+        elif self.layout == "tight":
+            plt.tight_layout()
+        else:
+            raise ValueError("Invalid value of argument `layout`")
 
-        
         return F
-        
 
+    def concatenate(it_gfigs, num_subplot_rows=None, num_subplot_columns=1):
+        """Concatenates the subplots of a collection of GFigure objects.
+
+       Args:
+         it_gfigs: iterable that returns GFigures. 
+
+         num_subplot_rows and num_subplot_columns: see GFigure.__init__()
+
+       Returns: 
+         gfig: an object of class GFigure.
+
+       """
+
+        l_subplots = [
+            subplot for gfig in it_gfigs for subplot in gfig.l_subplots
+        ]
+
+        gfig = next(iter(it_gfigs)) # take the first
+        gfig.l_subplots = l_subplots
+        gfig.num_subplot_rows = num_subplot_rows
+        gfig.num_subplot_columns = num_subplot_columns
+
+        return gfig
+        
 
 def example_figures(ind_example):
 
@@ -508,12 +558,12 @@ def example_figures(ind_example):
         # curve.
         def my_simulation():
             coef = np.random.random()
-            v_y_new = coef*v_y1
-            G.add_curve(xaxis=v_x, yaxis=v_y_new, legend="coef = %.2f"%coef)
+            v_y_new = coef * v_y1
+            G.add_curve(xaxis=v_x, yaxis=v_y_new, legend="coef = %.2f" % coef)
 
         """ One can specify the axis labels and title when the figure is
-        created."""        
-        G = GFigure(xlabel="x", ylabel="f(x)", title="Parabola") 
+        created."""
+        G = GFigure(xlabel="x", ylabel="f(x)", title="Parabola")
         for ind in range(0, 6):
             my_simulation()
     elif ind_example == 4:
@@ -548,8 +598,8 @@ def example_figures(ind_example):
         and, therefore, function `next_subplot` will move to the
         second subplot of the figure the first time `my_simulation` is
         executed."""
-        
-        G = GFigure(num_subplot_rows=3) 
+
+        G = GFigure(num_subplot_rows=3)
         for ind in range(0, 6):
             my_simulation()
 
