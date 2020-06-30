@@ -494,12 +494,13 @@ class GFigure:
                 self.l_subplots[index].plot()
 
         # Layout
-        if self.layout == "":
-            pass
-        elif self.layout == "tight":
-            plt.tight_layout()
-        else:
-            raise ValueError("Invalid value of argument `layout`")
+        if hasattr(self, "layout"): # backwards compatibility
+            if self.layout == "":
+                pass
+            elif self.layout == "tight":
+                plt.tight_layout()
+            else:
+                raise ValueError("Invalid value of argument `layout`")
 
         return F
 
