@@ -24,7 +24,9 @@ class AbstractExperimentSet:
 
         if f_name in dir(cls):
             start_time = datetime.now()
-            print("Running experiment %s" % experiment_id)
+            print("----------------------------------------------------------------------")
+            print(f"Starting experiment {experiment_id} at {datetime.now()}.")
+            print("----------------------------------------------------------------------")
             l_G = getattr(cls, f_name)(l_args)
             end_time = datetime.now()
             AbstractExperimentSet.print_time(start_time, end_time)
