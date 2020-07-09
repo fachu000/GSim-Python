@@ -12,11 +12,11 @@ at the end.
 
 
 class Curve:
-    def __init__(self, xaxis=None, yaxis=[], style=None, legend_str=""):
+    def __init__(self, xaxis=None, yaxis=[], ylower=[], yupper=[], style=None, legend_str=""):
         """
         
-        xaxis : list of a numeric type or None. In the former case, its length 
-            equal the length of yaxis.
+        xaxis : None or a list of a numeric type. In the latter case, its length 
+            equals the length of yaxis.
 
         yaxis : list of a numeric type. 
 
@@ -41,10 +41,27 @@ class Curve:
         # Save
         self.xaxis = xaxis
         self.yaxis = yaxis
+        self.ylower = ylower
+        self.yupper = yupper
         self.style = style
         self.legend_str = legend_str
 
+    def __repr__(self):
+        return f"<Curve: legend_str = {self.legend_str}, num_points = {len(self.yaxis)}>"
+        
     def plot(self):
+
+        def plot_band(lower, upper):
+            if self.xaxis:
+                plt.fill_between(self.xaxis, lower, upper, alpha=0.2)
+            else:
+                plt.fill_between(lower, upper, alpha=0.2)
+                
+        if hasattr(self, "ylower"): # check for backwards compatibility
+            if self.ylower:
+                plot_band(self.ylower, self.yaxis)
+            if self.yupper:
+                plot_band(self.yaxis, self.yupper)
 
         if type(self.xaxis) == list and len(self.xaxis):
             if self.style:
@@ -100,10 +117,13 @@ class Subplot:
         self.xlim = xlim
         self.ylim = ylim
 
-        #    self.l_curves = Subplot._l_curve_from_input_args(xaxis, yaxis, styles,                                                      legend)
         self.l_curves = []
         self.add_curve(**kwargs)
 
+    def __repr__(self):
+        return f"<Subplot objet with title=\"{self.title}\", len(self.l_curves)={len(self.l_curves)} curves>"
+
+        
     def is_empty(self):
 
         return not any([self.title, self.xlabel, self.ylabel, self.l_curves])
@@ -117,21 +137,28 @@ class Subplot:
         if "ylabel" in kwargs:
             self.ylabel = kwargs["ylabel"]
 
-    def add_curve(self, xaxis=[], yaxis=[], styles=[], legend=tuple()):
+    def add_curve(self, xaxis=[], yaxis=[], ylower=[], yupper=[], styles=[], legend=tuple()):
         """
-
+        Adds a curve to `self`.
         """
 
         self.l_curves += Subplot._l_curve_from_input_args(
-            xaxis, yaxis, styles, legend)
+            xaxis, yaxis, ylower, yupper, styles, legend)
 
-    def _l_curve_from_input_args(xaxis, yaxis, styles, legend):
+    def _l_curve_from_input_args(xaxis, yaxis, ylower, yupper, styles, legend):
 
-        # Process the subplot input.  Each entry of l_xaxis or l_yaxis is
-        # a list of a numerical type. Both lists will have the same length.
+        # Process the subplot input.  Each entry of l_xaxis can be
+        # either None (use default x-axis) or a list of float. Each
+        # entry of l_yaxis is a list of float. Both l_xaxis and
+        # l_yaxis will have the same length.
         l_xaxis, l_yaxis = Subplot._list_from_axis_arguments(xaxis, yaxis)
+        # Each entry of `l_ylower` and `l_yupper` is either None (do
+        # not shade any area) or a list of float.
+        l_ylower, _ = Subplot._list_from_axis_arguments(ylower, yaxis)
+        l_yupper, _ = Subplot._list_from_axis_arguments(yupper, yaxis)
         l_style = Subplot._list_from_style_argument(styles)
-
+        # Note: all these lists can be empty.        
+        
         # Process style input.
         if len(l_style) == 0:
             l_style = [None] * len(l_xaxis)
@@ -179,10 +206,10 @@ class Subplot:
 
         # Construct Curve objects
         l_curve = []
-        for xax, yax, stl, leg in zip(l_xaxis, l_yaxis,
+        for xax, yax, ylow, yup, stl, leg in zip(l_xaxis, l_yaxis, l_ylower, l_yupper,
                                       l_style[0:len(l_xaxis)], legend):
             l_curve.append(
-                Curve(xaxis=xax, yaxis=yax, style=stl, legend_str=leg))
+                Curve(xaxis=xax, yaxis=yax, ylower=ylow, yupper=yup, style=stl, legend_str=leg))
         return l_curve
 
     def _list_from_style_argument(style_arg):
@@ -212,6 +239,8 @@ class Subplot:
         whose elements can be either None or lists of a numerical
         type. None means "use the default x-axis for this curve".
 
+        Both returned lists can be empty if no curve is specified.
+
         """
         def unify_format(axis):
             def ndarray_to_list(arr):
@@ -232,29 +261,42 @@ class Subplot:
             if (type(axis) == np.ndarray):
                 return ndarray_to_list(axis)
             elif (type(axis) == list):
+                # at this point, `axis` can be:
+                # 1. empty list: either no curves are specified or, in case of
+                #    the x-axis, the specified curves should use the default xaxis.           
                 if len(axis) == 0:
                     return []
+                # 2. A list of a numeric type. Only one axis specified.
                 if Subplot.is_number(axis[0]):
-                    return [copy.copy(axis)]
-                else:
+                    #return [copy.copy(axis)]
+                    return [[float(ax) for ax in axis]]
+                # 3. A list where each entry specifies one axis. 
+                else:                    
                     out_list = []
                     for entry in axis:
-                        # Compatibility with TensorFlow
+                        # Each entry can be:
+                        # 3a. a tf.Tensor
                         if hasattr(entry, "numpy"):
                             entry = entry.numpy()
 
-                        if type(entry) == np.ndarray:
+                        # 3b. an np.ndarray
+                        if isinstance(entry, np.ndarray):
                             if entry.ndim == 1:
-                                out_list.append(copy.copy(entry))
+                                #out_list.append(copy.copy(entry))
+                                out_list.append([float(ent) for ent in entry])
                             else:
                                 raise Exception(
                                     "Arrays inside the list must be 1D in the current implementation"
                                 )
+                        # 3c. a list of a numeric type
                         elif type(entry) == list:
-                            if len(entry) == 0:
+                            # 3c1: for an x-axis, empty `entry` means default axis.
+                            if len(entry) == 0:                                
                                 out_list.append([])
+                            # 3c2: Numerical type
                             elif Subplot.is_number(entry[0]):
-                                out_list.append(copy.copy(entry))
+                                #out_list.append(copy.copy(entry))
+                                out_list.append([float(ent) for ent in entry])
                             else:
                                 raise TypeError
                     return out_list
@@ -267,7 +309,14 @@ class Subplot:
         l_xaxis = unify_format(xaxis_arg)
         l_yaxis = unify_format(yaxis_arg)
 
-        # Expand (broadcast) lists to have the same length
+        """At this point, `l_xaxis` can be:
+        - []: use the default xaxis if a curve is provide (len(l_yaxis)>0). 
+          No curves specified if len(l_yaxis)=0. 
+        - [None]: use the default xaxis for all specfied curves.
+        - [xaxis1, xaxis2,... xaxisN], where xaxisn is a list of float.
+        """
+
+        # Expand (broadcast) l_xaxis to have the same length as l_yaxis
         str_message = "Number of curves in the xaxis must be"\
             " 1 or equal to the number of curves in the y axis"
         if len(l_xaxis) > 0 and len(l_yaxis) != len(l_xaxis):
@@ -347,18 +396,25 @@ class GFigure:
 
         xaxis and yaxis:
             (a) To specify only one curve:
-                - `yaxis` can be a 1D np.ndarray or a list of a numeric type 
+                - `yaxis` can be a 1D np.ndarray, a 1D tf.Tensor or a list 
+                of a numeric type 
                 - `xaxis` can be None, a list of a numeric type, or a 1D 
                 np.array of the same length as `yaxis`.
             (b) To specify one or more curves:
                 - `yaxis` can be:
                     -> a list whose elements are as described in (a)
-                    -> M x N np.ndarray. Each row corresponds to a curve.
+                    -> M x N np.ndarray or tf.Tensor. Each row corresponds to a curve.
                 - `xaxis` can be either as in (a), so all curves share the same 
                 X-axis points, or
                     -> a list whose elements are as described in (a)
                     -> Mx x N np.ndarray. Each row corresponds to a curve. Mx 
                     must be either M or 1. 
+        ylower and yupper: specify a shaded area around the curve, used e.g. for 
+            confidence bounds. The area between ylower and yaxis as well as the 
+            area between yaxis and yupper are shaded.
+
+Their format is the same as yaxis.
+        
 
         styles: specifies the style argument to plot, as in MATLAB. Possibilities:
             - str : this style is applied to all curves specified by 
@@ -397,13 +453,9 @@ class GFigure:
 
         """
 
+        # Create a subplot if the arguments specify one
         new_subplot = Subplot(*args, **kwargs)
-        #        set_trace()
         self.ind_active_subplot = ind_active_subplot
-
-        # List of axes to create subplots
-        # self.l_subplots = [None] * (self.ind_active_subplot + 1)
-        # self.l_subplots[self.ind_active_subplot] = new_subplot
         if not new_subplot.is_empty():
             # List of axes to create subplots
             self.l_subplots = [None] * (self.ind_active_subplot + 1)
@@ -420,7 +472,8 @@ class GFigure:
         else:
             raise ValueError("Invalid value of argument `layout`")
 
-
+    def __repr__(self):
+        return f"<GFigure object with len(self.l_subplots)={len(self.l_subplots)} subplots>"
 
     def add_curve(self, *args, ind_active_subplot=None, **kwargs):
         """

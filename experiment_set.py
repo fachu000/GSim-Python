@@ -83,7 +83,7 @@ class AbstractExperimentSet:
         plt.show()
 
     @classmethod
-    def plot_only(cls, experiment_id, save_pdf=False):
+    def plot_only(cls, experiment_id, save_pdf=False, inspect=False):
 
         f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
         l_G = cls.load_fig(f_name)
@@ -92,6 +92,9 @@ class AbstractExperimentSet:
                 "The experiment %s does not exist or has not been run before."
                 % experiment_id)
         else:
+            if inspect:
+                print("The GFigures are available as `l_G`")
+                set_trace()
             cls.plot_list_of_GFigure(l_G, save_pdf=save_pdf, experiment_id=experiment_id)
 
     def print_time(start_time, end_time):
