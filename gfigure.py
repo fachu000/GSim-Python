@@ -12,7 +12,13 @@ at the end.
 
 
 class Curve:
-    def __init__(self, xaxis=None, yaxis=[], ylower=[], yupper=[], style=None, legend_str=""):
+    def __init__(self,
+                 xaxis=None,
+                 yaxis=[],
+                 ylower=[],
+                 yupper=[],
+                 style=None,
+                 legend_str=""):
         """
         
         xaxis : None or a list of a numeric type. In the latter case, its length 
@@ -48,16 +54,15 @@ class Curve:
 
     def __repr__(self):
         return f"<Curve: legend_str = {self.legend_str}, num_points = {len(self.yaxis)}>"
-        
-    def plot(self):
 
+    def plot(self):
         def plot_band(lower, upper):
             if self.xaxis:
                 plt.fill_between(self.xaxis, lower, upper, alpha=0.2)
             else:
                 plt.fill_between(lower, upper, alpha=0.2)
-                
-        if hasattr(self, "ylower"): # check for backwards compatibility
+
+        if hasattr(self, "ylower"):  # check for backwards compatibility
             if self.ylower:
                 plot_band(self.ylower, self.yaxis)
             if self.yupper:
@@ -123,7 +128,6 @@ class Subplot:
     def __repr__(self):
         return f"<Subplot objet with title=\"{self.title}\", len(self.l_curves)={len(self.l_curves)} curves>"
 
-        
     def is_empty(self):
 
         return not any([self.title, self.xlabel, self.ylabel, self.l_curves])
@@ -137,7 +141,13 @@ class Subplot:
         if "ylabel" in kwargs:
             self.ylabel = kwargs["ylabel"]
 
-    def add_curve(self, xaxis=[], yaxis=[], ylower=[], yupper=[], styles=[], legend=tuple()):
+    def add_curve(self,
+                  xaxis=[],
+                  yaxis=[],
+                  ylower=[],
+                  yupper=[],
+                  styles=[],
+                  legend=tuple()):
         """
         Adds a curve to `self`.
         """
@@ -157,8 +167,8 @@ class Subplot:
         l_ylower, _ = Subplot._list_from_axis_arguments(ylower, yaxis)
         l_yupper, _ = Subplot._list_from_axis_arguments(yupper, yaxis)
         l_style = Subplot._list_from_style_argument(styles)
-        # Note: all these lists can be empty.        
-        
+        # Note: all these lists can be empty.
+
         # Process style input.
         if len(l_style) == 0:
             l_style = [None] * len(l_xaxis)
@@ -179,11 +189,14 @@ class Subplot:
             if len(legend) == 0:
                 legend = [""] * len(l_xaxis)
             else:
-                assert type(
-                    legend[0]
-                ) == str, "`legend` must be an str, list of str, or tuple of str"
-                assert (len(legend) == len(l_xaxis)
-                        ), "len(legend) must equal 0 or the number of curves"
+                if type(legend[0]) != str:
+                    raise TypeError(
+                        "`legend` must be an str, list of str, or tuple of str."
+                    )
+                if (len(legend) != len(l_yaxis)):
+                    raise ValueError(
+                        f"len(legend)={len(legend)} should equal 0 or the "
+                        f"number of curves={len(l_yaxis)}")
 
         b_debug = True
         if b_debug:
@@ -206,10 +219,17 @@ class Subplot:
 
         # Construct Curve objects
         l_curve = []
-        for xax, yax, ylow, yup, stl, leg in zip(l_xaxis, l_yaxis, l_ylower, l_yupper,
-                                      l_style[0:len(l_xaxis)], legend):
+        for xax, yax, ylow, yup, stl, leg in zip(l_xaxis, l_yaxis, l_ylower,
+                                                 l_yupper,
+                                                 l_style[0:len(l_xaxis)],
+                                                 legend):
             l_curve.append(
-                Curve(xaxis=xax, yaxis=yax, ylower=ylow, yupper=yup, style=stl, legend_str=leg))
+                Curve(xaxis=xax,
+                      yaxis=yax,
+                      ylower=ylow,
+                      yupper=yup,
+                      style=stl,
+                      legend_str=leg))
         return l_curve
 
     def _list_from_style_argument(style_arg):
@@ -263,15 +283,15 @@ class Subplot:
             elif (type(axis) == list):
                 # at this point, `axis` can be:
                 # 1. empty list: either no curves are specified or, in case of
-                #    the x-axis, the specified curves should use the default xaxis.           
+                #    the x-axis, the specified curves should use the default xaxis.
                 if len(axis) == 0:
                     return []
                 # 2. A list of a numeric type. Only one axis specified.
                 if Subplot.is_number(axis[0]):
                     #return [copy.copy(axis)]
                     return [[float(ax) for ax in axis]]
-                # 3. A list where each entry specifies one axis. 
-                else:                    
+                # 3. A list where each entry specifies one axis.
+                else:
                     out_list = []
                     for entry in axis:
                         # Each entry can be:
@@ -291,7 +311,7 @@ class Subplot:
                         # 3c. a list of a numeric type
                         elif type(entry) == list:
                             # 3c1: for an x-axis, empty `entry` means default axis.
-                            if len(entry) == 0:                                
+                            if len(entry) == 0:
                                 out_list.append([])
                             # 3c2: Numerical type
                             elif Subplot.is_number(entry[0]):
@@ -308,7 +328,6 @@ class Subplot:
         # Construct two lists of possibly different lengths.
         l_xaxis = unify_format(xaxis_arg)
         l_yaxis = unify_format(yaxis_arg)
-
         """At this point, `l_xaxis` can be:
         - []: use the default xaxis if a curve is provide (len(l_yaxis)>0). 
           No curves specified if len(l_yaxis)=0. 
@@ -319,7 +338,7 @@ class Subplot:
         # Expand (broadcast) l_xaxis to have the same length as l_yaxis
         str_message = "Number of curves in the xaxis must be"\
             " 1 or equal to the number of curves in the y axis"
-        if len(l_xaxis) > 0 and len(l_yaxis) != len(l_xaxis):
+        if len(l_xaxis) > 1 and len(l_yaxis) != len(l_xaxis):
             raise Exception(str_message)
         if len(l_xaxis) == 0 and len(l_yaxis) > 0:
             l_xaxis = [None]
@@ -547,7 +566,7 @@ Their format is the same as yaxis.
                 self.l_subplots[index].plot()
 
         # Layout
-        if hasattr(self, "layout"): # backwards compatibility
+        if hasattr(self, "layout"):  # backwards compatibility
             if self.layout == "":
                 pass
             elif self.layout == "tight":
@@ -574,13 +593,13 @@ Their format is the same as yaxis.
             subplot for gfig in it_gfigs for subplot in gfig.l_subplots
         ]
 
-        gfig = next(iter(it_gfigs)) # take the first
+        gfig = next(iter(it_gfigs))  # take the first
         gfig.l_subplots = l_subplots
         gfig.num_subplot_rows = num_subplot_rows
         gfig.num_subplot_columns = num_subplot_columns
 
         return gfig
-        
+
 
 def example_figures(ind_example):
 
