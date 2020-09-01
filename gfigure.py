@@ -9,53 +9,118 @@ The easiest way to learn how to use this module is to run the examples
 at the end.
 
 """
+""" 
+TODO: 
+
+Replace lists of a numeric type in xaxis or yaxis with numpy
+arrays. With lists it gets messy when using 3D plots. 
+
+"""
 
 
 class Curve:
     def __init__(self,
                  xaxis=None,
                  yaxis=[],
+                 zaxis=None,
+                 zmin=None,
+                 zmax=None,
                  ylower=[],
                  yupper=[],
                  style=None,
                  legend_str=""):
-        """
-        
+        """1. For 2D plots:
+        ---------------
+
         xaxis : None or a list of a numeric type. In the latter case, its length 
             equals the length of yaxis.
 
         yaxis : list of a numeric type. 
 
+        zaxis : None
+
+        ylower, yupper: [] or lists of a numeric type with the same length as yaxis.
+
+
+        2. For 3D plots:
+        ----------------
+
+        xaxis: M x N numpy array
+
+        yaxis: M x N numpy array
+
+        zaxis: M x N numpy array
+
+        zmin and zmax: scalars indicating the endpoints of the color scale. 
+
+        Other arguments
+        ---------------
+
         style : str used as argument to plt.plot()
-        
+
         """
 
         # Input check
-        if type(yaxis) != list:
-            set_trace()
-            raise TypeError("`yaxis` must be a list of numeric entries")
-        if type(xaxis) == list:
-            assert len(xaxis) == len(yaxis)
-        elif xaxis is not None:
-            raise TypeError(
-                "`xaxis` must be a list of numeric entries or None")
+        if zaxis is None:
+            # 2D plot
+            if type(yaxis) != list:
+                set_trace()
+                raise TypeError("`yaxis` must be a list of numeric entries")
+            if type(xaxis) == list:
+                assert len(xaxis) == len(yaxis)
+            elif xaxis is not None:
+                raise TypeError(
+                    "`xaxis` must be a list of numeric entries or None")
+        else:
+            # 3D plot
+            def assert_type_and_shape(arg, name):
+                if not isinstance(arg, np.ndarray):
+                    raise TypeError(
+                        f"Argument {name} must be of class np.array.")
+                if arg.ndim != 2:
+                    raise ValueError(
+                        f"Argument {name} must be of dimension 2. ")
+
+            assert_type_and_shape(xaxis, "xaxis")
+            assert_type_and_shape(yaxis, "yaxis")
+            assert_type_and_shape(zaxis, "zaxis")
+            if xaxis.shape != zaxis.shape or yaxis.shape != zaxis.shape:
+                raise ValueError(
+                    "Arguments xaxis and zaxis must be of the same shape as zaxis"
+                )
+
         if (style is not None) and (type(style) != str):
             raise TypeError("`style` must be of type str or None")
         if type(legend_str) != str:
             raise TypeError("`legend_str` must be of type str")
 
-        # Save
+        # Common
         self.xaxis = xaxis
         self.yaxis = yaxis
+
+        # 2D
         self.ylower = ylower
         self.yupper = yupper
         self.style = style
         self.legend_str = legend_str
 
+        # 3D
+        self.zaxis = zaxis
+        self.zmin = zmin
+        self.zmax = zmax
+        self.image = None
+
     def __repr__(self):
         return f"<Curve: legend_str = {self.legend_str}, num_points = {len(self.yaxis)}>"
 
-    def plot(self):
+    def plot(self, **kwargs):
+
+        if hasattr(self, "zaxis") and self.zaxis is not None:
+            self._plot_3D(**kwargs)
+        else:
+            self._plot_2D()
+
+    def _plot_2D(self):
         def plot_band(lower, upper):
             if self.xaxis:
                 plt.fill_between(self.xaxis, lower, upper, alpha=0.2)
@@ -82,6 +147,22 @@ class Curve:
             else:
                 plt.plot(self.yaxis, label=self.legend_str)
 
+    def _plot_3D(self, axis=None):
+
+        assert axis
+
+        self.image = axis.imshow(
+            self.zaxis,
+            interpolation="nearest",
+            cmap='jet',
+            # origin='lower',
+            extent=[
+                self.xaxis[-1, 0], self.xaxis[-1, -1], self.yaxis[-1, 0],
+                self.yaxis[0, 0]
+            ],
+            vmax=self.zmax,
+            vmin=self.zmin)
+
     def legend_is_empty(l_curves):
 
         for curve in l_curves:
@@ -106,6 +187,8 @@ class Subplot:
                  title="",
                  xlabel="",
                  ylabel="",
+                 zlabel="",
+                 color_bar=False,
                  grid=True,
                  xlim=None,
                  ylim=None,
@@ -118,6 +201,8 @@ class Subplot:
         self.title = title
         self.xlabel = xlabel
         self.ylabel = ylabel
+        self.zlabel = zlabel
+        self.color_bar = color_bar
         self.grid = grid
         self.xlim = xlim
         self.ylim = ylim
@@ -144,6 +229,9 @@ class Subplot:
     def add_curve(self,
                   xaxis=[],
                   yaxis=[],
+                  zaxis=None,
+                  zmin=None,
+                  zmax=None,
                   ylower=[],
                   yupper=[],
                   styles=[],
@@ -152,10 +240,21 @@ class Subplot:
         Adds a curve to `self`.
         """
 
-        self.l_curves += Subplot._l_curve_from_input_args(
-            xaxis, yaxis, ylower, yupper, styles, legend)
+        if zaxis is None:
+            # 2D figure
+            self.l_curves += Subplot._l_2D_curve_from_input_args(
+                xaxis, yaxis, ylower, yupper, styles, legend)
+        else:
+            # 3D figure
+            self.l_curves.append(
+                Curve(xaxis=xaxis,
+                      yaxis=yaxis,
+                      zaxis=zaxis,
+                      zmin=zmin,
+                      zmax=zmax))
 
-    def _l_curve_from_input_args(xaxis, yaxis, ylower, yupper, styles, legend):
+    def _l_2D_curve_from_input_args(xaxis, yaxis, ylower, yupper, styles,
+                                    legend):
 
         # Process the subplot input.  Each entry of l_xaxis can be
         # either None (use default x-axis) or a list of float. Each
@@ -353,17 +452,27 @@ class Subplot:
 
         return l_xaxis, l_yaxis
 
-    def plot(self):
+    def plot(self, **kwargs):
 
         for curve in self.l_curves:
-            curve.plot()
+            curve.plot(**kwargs)
 
 
 #        plt.legend(Curve.list_to_legend(self.l_curves))
         if not Curve.legend_is_empty(self.l_curves):
             plt.legend()
+
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
+        if hasattr(self, "color_bar") and self.color_bar:
+            image = self.get_image()
+            if image is None:
+                raise ValueError(
+                    "color_bar=True but no color figure was specified")
+            cbar = plt.colorbar(image)  #, cax=cbar_ax)
+            if self.zlabel:
+                cbar.set_label(self.zlabel)
+
         if self.title:
             plt.title(self.title)
 
@@ -379,7 +488,17 @@ class Subplot:
                 plt.ylim(self.ylim)
 
         return
+    
+    def get_image(self):
+        """Scans l_curves to see if one has defined the attribute "image". If
+        so, it returns the value of this attribute, else it returns
+        None.
 
+        """        
+        for curve in self.l_curves:
+            if curve.image:
+                return curve.image
+        return None
 
 class GFigure:
     def __init__(self,
@@ -388,6 +507,8 @@ class GFigure:
                  ind_active_subplot=0,
                  num_subplot_rows=None,
                  num_subplot_columns=1,
+                 global_color_bar=False,
+                 global_color_bar_label="",
                  layout="",
                  **kwargs):
         """Arguments of mutable types are (deep) copied so they can be
@@ -395,6 +516,7 @@ class GFigure:
         without altering the figure.
         
         SUBPLOT ARGUMENTS:
+        =================
 
         The first set of arguments allow the user to create a subplot when 
         creating the GFigure object.
@@ -412,6 +534,10 @@ class GFigure:
         ylim : tuple
 
         CURVE ARGUMENTS:
+        =================
+
+        1. 2D plots
+        -----------
 
         xaxis and yaxis:
             (a) To specify only one curve:
@@ -430,10 +556,30 @@ class GFigure:
                     must be either M or 1. 
         ylower and yupper: specify a shaded area around the curve, used e.g. for 
             confidence bounds. The area between ylower and yaxis as well as the 
-            area between yaxis and yupper are shaded.
-
-Their format is the same as yaxis.
+            area between yaxis and yupper are shaded. Their format is the same as yaxis.
         
+        zaxis: None
+
+        2. 3D plots
+        -----------
+
+        xaxis: M x N numpy array
+
+        yaxis: M x N numpy array
+
+        zaxis: M x N numpy array
+
+        zmin and zmax: scalars indicating the endpoints of the color scale. 
+
+        global_color_bar: if True, one colorbar for the entire figure. 
+
+        global_color_bar_label: str indicating the label of the global colorbar.
+
+        color_bar: a colorbar only for the specified axis.
+
+
+        3. Others
+        ---------
 
         styles: specifies the style argument to plot, as in MATLAB. Possibilities:
             - str : this style is applied to all curves specified by 
@@ -446,6 +592,7 @@ Their format is the same as yaxis.
 
 
         ARGUMENTS FOR SPECIFYING HOW TO SUBPLOT:
+        ========================================
 
         
        `ind_active_subplot`: The index of the subplot that is created and
@@ -466,6 +613,7 @@ Their format is the same as yaxis.
             can be specified subsequently.
 
         LAYOUT
+        ======
 
         `layout`: can be "", "tight", or "constrained". See pyplot
         documentation.
@@ -485,6 +633,8 @@ Their format is the same as yaxis.
         self.num_subplot_rows = num_subplot_rows
         self.num_subplot_columns = num_subplot_columns
         self.figsize = figsize
+        self.global_color_bar = global_color_bar
+        self.global_color_bar_label = global_color_bar_label
 
         if layout == "" or layout == "tight":
             self.layout = layout
@@ -560,10 +710,10 @@ Their format is the same as yaxis.
                     np.ceil(num_axes / self.num_subplot_columns))
 
         for index, subplot in enumerate(self.l_subplots):
-            plt.subplot(self.num_subplot_rows, self.num_subplot_columns,
-                        index + 1)
+            axis = plt.subplot(self.num_subplot_rows, self.num_subplot_columns,
+                               index + 1)
             if self.l_subplots[index] is not None:
-                self.l_subplots[index].plot()
+                self.l_subplots[index].plot(axis=axis)
 
         # Layout
         if hasattr(self, "layout"):  # backwards compatibility
@@ -573,6 +723,20 @@ Their format is the same as yaxis.
                 plt.tight_layout()
             else:
                 raise ValueError("Invalid value of argument `layout`")
+
+        if hasattr(self, "global_color_bar") and self.global_color_bar:
+
+            for subplot in self.l_subplots:
+                image = subplot.get_image()
+                if image:
+                    break
+            F.subplots_adjust(right=0.9)
+            cbar_ax = F.add_axes([0.9, 0.35, 0.02, 0.5])
+            cbar = F.colorbar(image, cax=cbar_ax)
+            
+            if self.global_color_bar_label:
+                cbar.set_label(self.global_color_bar_label)
+            
 
         return F
 
@@ -673,6 +837,37 @@ def example_figures(ind_example):
         executed."""
 
         G = GFigure(num_subplot_rows=3)
+        for ind in range(0, 6):
+            my_simulation()
+
+    elif ind_example == 7:
+        # Colorplot of a function of 2 arguments.
+        num_points_x = 30
+        num_points_y = 30
+        gridpoint_spacing = 1 / 30
+        v_x_coords = np.arange(0, num_points_x) * gridpoint_spacing
+        v_y_coords = np.arange(num_points_y - 1, -1,
+                               step=-1) * gridpoint_spacing
+        x_coords, y_coords = np.meshgrid(v_x_coords, v_y_coords, indexing='xy')
+
+        def my_simulation():
+            xroot = np.random.random()
+            yroot = np.random.random()
+            zaxis = (x_coords - xroot)**2 + (y_coords - yroot)**2
+            G.next_subplot(xlabel="x",
+                           ylabel="y",
+                           zlabel="z",
+                           grid=False,
+                           color_bar=False,
+                           zmin=0,
+                           zmax=1)
+            G.add_curve(xaxis=x_coords, yaxis=y_coords, zaxis=zaxis)
+            G.add_curve(xaxis=[xroot], yaxis=[yroot], styles="+w")
+
+        G = GFigure(num_subplot_rows=3,
+                    global_color_bar=True,
+                    global_color_bar_label="z")
+                    
         for ind in range(0, 6):
             my_simulation()
 
