@@ -488,17 +488,18 @@ class Subplot:
                 plt.ylim(self.ylim)
 
         return
-    
+
     def get_image(self):
         """Scans l_curves to see if one has defined the attribute "image". If
         so, it returns the value of this attribute, else it returns
         None.
 
-        """        
+        """
         for curve in self.l_curves:
             if curve.image:
                 return curve.image
         return None
+
 
 class GFigure:
     def __init__(self,
@@ -509,6 +510,7 @@ class GFigure:
                  num_subplot_columns=1,
                  global_color_bar=False,
                  global_color_bar_label="",
+                 global_color_bar_position=[0.85, 0.35, 0.02, 0.5],
                  layout="",
                  **kwargs):
         """Arguments of mutable types are (deep) copied so they can be
@@ -574,6 +576,7 @@ class GFigure:
         global_color_bar: if True, one colorbar for the entire figure. 
 
         global_color_bar_label: str indicating the label of the global colorbar.
+        global_color_bar_position: vector with four entries.
 
         color_bar: a colorbar only for the specified axis.
 
@@ -635,6 +638,7 @@ class GFigure:
         self.figsize = figsize
         self.global_color_bar = global_color_bar
         self.global_color_bar_label = global_color_bar_label
+        self.global_color_bar_position = global_color_bar_position
 
         if layout == "" or layout == "tight":
             self.layout = layout
@@ -730,13 +734,13 @@ class GFigure:
                 image = subplot.get_image()
                 if image:
                     break
-            F.subplots_adjust(right=0.9)
-            cbar_ax = F.add_axes([0.9, 0.35, 0.02, 0.5])
-            cbar = F.colorbar(image, cax=cbar_ax)
+            F.subplots_adjust(right=0.85)
             
+            cbar_ax = F.add_axes(self.global_color_bar_position)
+            cbar = F.colorbar(image, cax=cbar_ax)
+
             if self.global_color_bar_label:
                 cbar.set_label(self.global_color_bar_label)
-            
 
         return F
 
@@ -867,7 +871,7 @@ def example_figures(ind_example):
         G = GFigure(num_subplot_rows=3,
                     global_color_bar=True,
                     global_color_bar_label="z")
-                    
+
         for ind in range(0, 6):
             my_simulation()
 
