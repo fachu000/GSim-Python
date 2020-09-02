@@ -153,7 +153,8 @@ class Curve:
 
         self.image = axis.imshow(
             self.zaxis,
-            interpolation="nearest",
+            #interpolation="nearest",
+            interpolation="bilinear",
             cmap='jet',
             # origin='lower',
             extent=[
