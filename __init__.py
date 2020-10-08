@@ -1,2 +1,3 @@
 from experiment_set import AbstractExperimentSet
 from gfigure import GFigure
+from experiment_set import OUTPUT_DATA_FOLDER
