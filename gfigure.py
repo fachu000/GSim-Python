@@ -364,9 +364,13 @@ class Subplot:
         """
         def unify_format(axis):
             def ndarray_to_list(arr):
+                """Returns a list of lists."""
                 assert (type(arr) == np.ndarray)
                 if arr.ndim == 1:
-                    return [list(arr)]
+                    if len(arr):
+                        return [list(arr)]
+                    else:
+                        return []
                 elif arr.ndim == 2:
                     return [[arr[row, col] for col in range(0, arr.shape[1])]
                             for row in range(0, arr.shape[0])]
@@ -429,7 +433,7 @@ class Subplot:
         l_xaxis = unify_format(xaxis_arg)
         l_yaxis = unify_format(yaxis_arg)
         """At this point, `l_xaxis` can be:
-        - []: use the default xaxis if a curve is provide (len(l_yaxis)>0). 
+        - []: use the default xaxis if a curve is provided (len(l_yaxis)>0). 
           No curves specified if len(l_yaxis)=0. 
         - [None]: use the default xaxis for all specfied curves.
         - [xaxis1, xaxis2,... xaxisN], where xaxisn is a list of float.
