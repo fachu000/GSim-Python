@@ -23,8 +23,6 @@ class Curve:
                  xaxis=None,
                  yaxis=[],
                  zaxis=None,
-                 zmin=None,
-                 zmax=None,
                  zinterpolation='none',
                  ylower=[],
                  yupper=[],
@@ -55,8 +53,6 @@ class Curve:
         yaxis: M x N numpy array
 
         zaxis: M x N numpy array
-
-        zmin and zmax: scalars indicating the endpoints of the color scale. 
 
         zinterpolation: see GFigure.__init__
 
@@ -113,8 +109,6 @@ class Curve:
 
         # 3D
         self.zaxis = zaxis
-        self.zmin = zmin
-        self.zmax = zmax
         self.zinterpolation = zinterpolation
         self.image = None
 
@@ -155,7 +149,7 @@ class Curve:
             else:
                 plt.plot(self.yaxis, label=self.legend_str)
 
-    def _plot_3D(self, axis=None, interpolation="none"):
+    def _plot_3D(self, axis=None, interpolation="none", zlim=None):
 
         assert axis
 
@@ -168,8 +162,8 @@ class Curve:
                 self.xaxis[-1, 0], self.xaxis[-1, -1], self.yaxis[-1, 0],
                 self.yaxis[0, 0]
             ],
-            vmax=self.zmax,
-            vmin=self.zmin)
+            vmax=zlim[1] if zlim else None,
+            vmin=zlim[0] if zlim else None)
 
     def legend_is_empty(l_curves):
 
@@ -200,6 +194,7 @@ class Subplot:
                  grid=True,
                  xlim=None,
                  ylim=None,
+                 zlim=None,
                  **kwargs):
         """
         For a description of the arguments, see GFigure.__init__
@@ -214,6 +209,7 @@ class Subplot:
         self.grid = grid
         self.xlim = xlim
         self.ylim = ylim
+        self.zlim = zlim
 
         self.l_curves = []
         self.add_curve(**kwargs)
@@ -238,8 +234,6 @@ class Subplot:
                   xaxis=[],
                   yaxis=[],
                   zaxis=None,
-                  zmin=None,
-                  zmax=None,
                   zinterpolation="bilinear",
                   ylower=[],
                   yupper=[],
@@ -259,8 +253,6 @@ class Subplot:
                 Curve(xaxis=xaxis,
                       yaxis=yaxis,
                       zaxis=zaxis,
-                      zmin=zmin,
-                      zmax=zmax,
                       zinterpolation=zinterpolation))
 
     def _l_2D_curve_from_input_args(xaxis, yaxis, ylower, yupper, styles,
@@ -465,7 +457,7 @@ class Subplot:
     def plot(self, **kwargs):
 
         for curve in self.l_curves:
-            curve.plot(**kwargs)
+            curve.plot(zlim=self.zlim, **kwargs)
 
         if not Curve.legend_is_empty(self.l_curves):
             plt.legend()
@@ -542,9 +534,11 @@ class GFigure:
 
         grid : bool
 
-        xlim : tuple
+        xlim : tuple, endpoints for the x axis.
 
-        ylim : tuple
+        ylim : tuple, endpoints for the y axis.
+
+        zlim : tuple, endpoints for the z axis. Used e.g. for the color scale. 
 
         CURVE ARGUMENTS:
         =================
@@ -581,8 +575,6 @@ class GFigure:
         yaxis: M x N numpy array
 
         zaxis: M x N numpy array
-
-        zmin and zmax: scalars indicating the endpoints of the color scale. 
 
         zinterpolation: Supported values are 'none', 'antialiased',
         'nearest', 'bilinear', 'bicubic', 'spline16', 'spline36',
@@ -714,7 +706,7 @@ class GFigure:
             figsize = self.figsize
 
         F = plt.figure(figsize=figsize)
-        
+
         # Determine the number of rows and columns for arranging the subplots
         num_axes = len(self.l_subplots)
         if self.num_subplot_rows is not None:
@@ -753,7 +745,7 @@ class GFigure:
                 if image:
                     break
             F.subplots_adjust(right=0.85)
-            
+
             cbar_ax = F.add_axes(self.global_color_bar_position)
             cbar = F.colorbar(image, cax=cbar_ax)
 
@@ -881,8 +873,7 @@ def example_figures(ind_example):
                            zlabel="z",
                            grid=False,
                            color_bar=False,
-                           zmin=0,
-                           zmax=1)
+                           zlim=(0, 1))
             G.add_curve(xaxis=x_coords, yaxis=y_coords, zaxis=zaxis)
             G.add_curve(xaxis=[xroot], yaxis=[yroot], styles="+w")
 
