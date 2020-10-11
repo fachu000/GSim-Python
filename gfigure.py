@@ -25,11 +25,16 @@ class Curve:
                  zaxis=None,
                  zmin=None,
                  zmax=None,
+                 zinterpolation='none',
                  ylower=[],
                  yupper=[],
                  style=None,
                  legend_str=""):
-        """1. For 2D plots:
+        """
+
+        See GFigure.__init__ for more information.
+
+        1. For 2D plots:
         ---------------
 
         xaxis : None or a list of a numeric type. In the latter case, its length 
@@ -52,6 +57,8 @@ class Curve:
         zaxis: M x N numpy array
 
         zmin and zmax: scalars indicating the endpoints of the color scale. 
+
+        zinterpolation: see GFigure.__init__
 
         Other arguments
         ---------------
@@ -108,6 +115,7 @@ class Curve:
         self.zaxis = zaxis
         self.zmin = zmin
         self.zmax = zmax
+        self.zinterpolation = zinterpolation
         self.image = None
 
     def __repr__(self):
@@ -147,14 +155,13 @@ class Curve:
             else:
                 plt.plot(self.yaxis, label=self.legend_str)
 
-    def _plot_3D(self, axis=None):
+    def _plot_3D(self, axis=None, interpolation="none"):
 
         assert axis
 
         self.image = axis.imshow(
             self.zaxis,
-            #interpolation="nearest",
-            interpolation="bilinear",
+            interpolation=self.zinterpolation,
             cmap='jet',
             # origin='lower',
             extent=[
@@ -195,7 +202,7 @@ class Subplot:
                  ylim=None,
                  **kwargs):
         """
-        For a description of the arguments, see GFigure.
+        For a description of the arguments, see GFigure.__init__
         
         """
 
@@ -233,12 +240,13 @@ class Subplot:
                   zaxis=None,
                   zmin=None,
                   zmax=None,
+                  zinterpolation="bilinear",
                   ylower=[],
                   yupper=[],
                   styles=[],
                   legend=tuple()):
         """
-        Adds a curve to `self`.
+        Adds a curve to `self`. See documentation of GFigure.__init__
         """
 
         if zaxis is None:
@@ -252,7 +260,8 @@ class Subplot:
                       yaxis=yaxis,
                       zaxis=zaxis,
                       zmin=zmin,
-                      zmax=zmax))
+                      zmax=zmax,
+                      zinterpolation=zinterpolation))
 
     def _l_2D_curve_from_input_args(xaxis, yaxis, ylower, yupper, styles,
                                     legend):
@@ -458,13 +467,14 @@ class Subplot:
         for curve in self.l_curves:
             curve.plot(**kwargs)
 
-
-#        plt.legend(Curve.list_to_legend(self.l_curves))
         if not Curve.legend_is_empty(self.l_curves):
             plt.legend()
 
+        # Axis labels
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
+
+        # Color bar
         if hasattr(self, "color_bar") and self.color_bar:
             image = self.get_image()
             if image is None:
@@ -573,6 +583,11 @@ class GFigure:
         zaxis: M x N numpy array
 
         zmin and zmax: scalars indicating the endpoints of the color scale. 
+
+        zinterpolation: Supported values are 'none', 'antialiased',
+        'nearest', 'bilinear', 'bicubic', 'spline16', 'spline36',
+        'hanning', 'hamming', 'hermite', 'kaiser', 'quadric',
+        'catrom', 'gaussian', 'bessel', 'mitchell', 'sinc', 'lanczos'.
 
         global_color_bar: if True, one colorbar for the entire figure. 
 
@@ -699,8 +714,8 @@ class GFigure:
             figsize = self.figsize
 
         F = plt.figure(figsize=figsize)
-        #plt.tight_layout()
-
+        
+        # Determine the number of rows and columns for arranging the subplots
         num_axes = len(self.l_subplots)
         if self.num_subplot_rows is not None:
             self.num_subplot_columns = int(
@@ -714,6 +729,7 @@ class GFigure:
                 self.num_subplot_rows = int(
                     np.ceil(num_axes / self.num_subplot_columns))
 
+        # Actual plotting operation
         for index, subplot in enumerate(self.l_subplots):
             axis = plt.subplot(self.num_subplot_rows, self.num_subplot_columns,
                                index + 1)
@@ -729,6 +745,7 @@ class GFigure:
             else:
                 raise ValueError("Invalid value of argument `layout`")
 
+        # Color bar
         if hasattr(self, "global_color_bar") and self.global_color_bar:
 
             for subplot in self.l_subplots:
