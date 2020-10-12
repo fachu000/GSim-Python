@@ -461,7 +461,9 @@ class Subplot:
     def plot(self, **kwargs):
 
         for curve in self.l_curves:
-            curve.plot(zlim=self.zlim, **kwargs)
+            curve.plot(
+                zlim=self.zlim if hasattr(self, "zlim") else None, # backwards comp.
+                **kwargs)
 
         if not Curve.legend_is_empty(self.l_curves):
             plt.legend()
