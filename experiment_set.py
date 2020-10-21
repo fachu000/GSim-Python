@@ -2,6 +2,7 @@ from IPython.core.debugger import set_trace
 from datetime import timedelta, datetime
 import matplotlib.pyplot as plt
 from gsim.gfigure import GFigure
+from gsim.utils import time_to_str
 import os
 import pickle
 
@@ -29,7 +30,7 @@ class AbstractExperimentSet:
             print("----------------------------------------------------------------------")
             l_G = getattr(cls, f_name)(l_args)
             end_time = datetime.now()
-            AbstractExperimentSet.print_time(start_time, end_time)
+            print("Elapsed time = ", time_to_str(end_time - start_time))
 
             # Set l_G to be a (possibly empty) list of GFigure
             if l_G is None:
@@ -96,27 +97,7 @@ class AbstractExperimentSet:
                 print("The GFigures are available as `l_G`")
                 set_trace()
             cls.plot_list_of_GFigure(l_G, save_pdf=save_pdf, experiment_id=experiment_id)
-
-    def print_time(start_time, end_time):
-        td = end_time - start_time
-        hours = td.seconds // 3600
-        reminder = td.seconds % 3600
-        minutes = reminder // 60
-        seconds = (td.seconds - hours * 3600 -
-                   minutes * 60) + td.microseconds / 1e6
-        time_str = ""
-        if td.days:
-            time_str = "%d days, " % td.days
-        if hours:
-            time_str = time_str + "%d hours, " % hours
-        if minutes:
-            time_str = time_str + "%d minutes, " % minutes
-        if time_str:
-            time_str = time_str + "and "
-
-        time_str = time_str + "%.3f seconds" % seconds
-        #set_trace()
-        print("Elapsed time = ", time_str)
+        
 
     @classmethod
     def experiment_set_data_folder(cls):
