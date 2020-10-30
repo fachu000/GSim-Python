@@ -1,6 +1,7 @@
 
 
 
+
 def time_to_str(time_delta):
 
     hours = time_delta.seconds // 3600
@@ -20,3 +21,17 @@ def time_to_str(time_delta):
 
     return time_str + "%.3f seconds" % seconds
     #set_trace()
+
+def print_obj_attributes(obj):
+
+    for name in dir(obj):
+        print("==============================================")
+        print(f"Attr. name: \"{name}\"")
+                
+        try:
+            attr = getattr(obj, name)
+            print(f"Attr. type: {type(attr)}")
+            print(attr)
+        except Exception:
+            pass
+
