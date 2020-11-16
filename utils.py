@@ -34,7 +34,7 @@ def print_obj_attributes(obj):
             pass
 
 
-def instruct(
+def instr(
     obj,
     expand_lists=False,
     level=0,
