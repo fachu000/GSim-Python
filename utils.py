@@ -1,4 +1,3 @@
-
 def time_to_str(time_delta):
 
     hours = time_delta.seconds // 3600
@@ -60,26 +59,26 @@ def instr(
     elif isinstance(obj, list):
         nprint(f"list of length {len(obj)}")
         for ind, item in enumerate(obj):
-            instruct(item,
-                     level=level + 1,
-                     prefix=f"{ind}:",
-                     expand_lists=expand_lists)
+            instr(item,
+                  level=level + 1,
+                  prefix=f"{ind}:",
+                  expand_lists=expand_lists)
             if not expand_lists:
                 break
 
     elif isinstance(obj, tuple):
         nprint(f"tuple of length {len(obj)}")
         for ind, item in enumerate(obj):
-            instruct(item,
-                     level=level + 1,
-                     prefix=f"{ind}: ",
-                     expand_lists=expand_lists)
+            instr(item,
+                  level=level + 1,
+                  prefix=f"{ind}: ",
+                  expand_lists=expand_lists)
     elif isinstance(obj, dict):
         nprint(f"dict with keys")
         for key, val in obj.items():
-            instruct(val,
-                     level=level + 1,
-                     prefix=f"\"{key}\":",
-                     expand_lists=expand_lists)
+            instr(val,
+                  level=level + 1,
+                  prefix=f"\"{key}\":",
+                  expand_lists=expand_lists)
     else:
         nprint(f"{obj.__class__}")
