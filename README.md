@@ -1,6 +1,6 @@
 # GSim-Python
 
-Simulation environment for Python.
+General-purpose simulation environment for Python.
 
 
 To download, cd to your git repository. Once there, type this:
