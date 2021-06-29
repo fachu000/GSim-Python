@@ -34,3 +34,4 @@ subfigures, subfigures are collections of curves. Simple to
 understand. See gsim.gfigure.example_figures for a small tutorial on
 how to use GFigure.
 
+Pull requests are welcome!!
