@@ -45,17 +45,17 @@ class AbstractExperimentSet:
                                        and type(l_G[0]) != GFigure):
                 raise Exception("""Function %s returns an unexpected type.
                        It must return either None, a GFigure object,
-                       or a list of GFigure objects""" % f_name)
+                       or a list of GFigure objects.""" % f_name)
 
             # Store and plot
             if len(l_G) == 0:
-                print("The experiment returned no GFigures")
+                print("The experiment returned no GFigures.")
             else:
                 cls.store_fig(l_G, f_name)
                 cls.plot_list_of_GFigure(l_G)
 
         else:
-            raise Exception("Experiment not found")
+            raise Exception("Experiment not found.")
 
     @classmethod
     def plot_list_of_GFigure(cls, l_G, save_pdf=False, experiment_id=None):
@@ -94,7 +94,7 @@ class AbstractExperimentSet:
                 % experiment_id)
         else:
             if inspect:
-                print("The GFigures are available as `l_G`")
+                print("The GFigures are available as `l_G`.")
                 set_trace()
             cls.plot_list_of_GFigure(l_G, save_pdf=save_pdf, experiment_id=experiment_id)
         
