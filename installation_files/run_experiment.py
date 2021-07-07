@@ -25,58 +25,61 @@ import gsim
 ########################################################################
 # Select experiment file:
 from Experiments.example_experiments import ExperimentSet
+# from Experiments.my_favorite_experiments import ExperimentSet
+# from Experiments.top_experiments_ever import ExperimentSet
 
 ########################################################################
 
-if (len(sys.argv) < 2):
-    print(
-        'Usage: python3 ', sys.argv[0],
-        '[option] <experiment_index> [cmdl_arg1 [cmdl_arg2 ... [cmdl_argN]]]')
-    print("""       <experiment_index>: identifier for the experiment 
-             
-            cmdl_argn: n-th argument to the experiment function (optional) 
+if __name__ == '__main__':
 
-            OPTIONS: 
-            
-            -p : plot only the stored results, do not run the simulations.
+    if (len(sys.argv) < 2):
+        print(
+            'Usage: python3 ', sys.argv[0],
+            '[option] <experiment_index> [cmdl_arg1 [cmdl_arg2 ... [cmdl_argN]]]'
+        )
+        print("""       <experiment_index>: identifier for the experiment 
 
-            -pe : plot only the stored results, do not run the simulations. Export the figures as pdf.
-            -pi : load the stored figures and open a pdb prompt to inspect the GFigure objects.
-    """)
-    quit()
+                cmdl_argn: n-th argument to the experiment function (optional) 
 
-l_args = sys.argv
-if l_args[1] == "-p":
-    # Plot only
-    ExperimentSet.plot_only(l_args[2])
+                OPTIONS: 
 
-elif l_args[1] == "-pe":
-    ExperimentSet.plot_only(l_args[2], save_pdf=True)
+                -p : plot only the stored results, do not run the simulations.
 
-elif l_args[1] == "-pi":
-    ExperimentSet.plot_only(l_args[2], inspect=True)
+                -pe : plot only the stored results, do not run the simulations. Export the figures as pdf.
+                -pi : load the stored figures and open a pdb prompt to inspect the GFigure objects.
+        """)
+        quit()
 
-else:
-    if (len(l_args) < 3):
-        cmdl_args = ""
+    l_args = sys.argv
+    if l_args[1] == "-p":
+        # Plot only
+        ExperimentSet.plot_only(l_args[2])
+
+    elif l_args[1] == "-pe":
+        ExperimentSet.plot_only(l_args[2], save_pdf=True)
+
+    elif l_args[1] == "-pi":
+        ExperimentSet.plot_only(l_args[2], inspect=True)
+
     else:
-        cmdl_args = l_args[2:]
+        if (len(l_args) < 3):
+            cmdl_args = ""
+        else:
+            cmdl_args = l_args[2:]
 
-    ExperimentSet.run_experiment(l_args[1], cmdl_args)
+        ExperimentSet.run_experiment(l_args[1], cmdl_args)
 
+    def set_permisions_recursively(folder):
+        for root, dirs, files in os.walk(folder):
+            for d in dirs:
+                os.chmod(os.path.join(root, d), 16895)
+            for f in files:
+                os.chmod(os.path.join(root, f), 33279)
 
-def set_permisions_recursively(folder):
-    for root, dirs, files in os.walk(folder):
-        for d in dirs:
-            os.chmod(os.path.join(root, d), 16895)
-        for f in files:
-            os.chmod(os.path.join(root, f), 33279)
-
-
-try:
-    set_permisions_recursively(gsim.OUTPUT_DATA_FOLDER)
-except Exception as e:
-    print(e)
-    print(
-        f"The permisions of the files and folders in {gsim.OUTPUT_DATA_FOLDER} could not be properly set, possibly because of your operating system. Please do not use the script sync_data until this issue is fixed"
-    )
+    try:
+        set_permisions_recursively(gsim.OUTPUT_DATA_FOLDER)
+    except Exception as e:
+        print(e)
+        print(
+            f"The permisions of the files and folders in {gsim.OUTPUT_DATA_FOLDER} could not be properly set, possibly because of your operating system. Please do not use the script sync_data until this issue is fixed"
+        )

@@ -12,16 +12,16 @@ OUTPUT_DATA_FOLDER = "./output/"
 
 class AbstractExperimentSet:
     @classmethod
-    def run_experiment(cls, experiment_id, l_args):
+    def run_experiment(cls, experiment_id, l_args=[]):
         """ Executes the experiment function with identifier <ind_experiment>
 
         Args:
-            experiment_id: experiment function identifier
+            experiment_id: experiment function identifier. str or numerical type.
             l_args: list of strings that can be used by the experiment function. 
                 Typical usage: number of iterations.
         """
 
-        f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
+        f_name = f"{EXPERIMENT_FUNCTION_BASE_NAME}{experiment_id}"
 
         if f_name in dir(cls):
             start_time = datetime.now()
@@ -55,7 +55,7 @@ class AbstractExperimentSet:
                 cls.plot_list_of_GFigure(l_G)
 
         else:
-            raise Exception("Experiment not found.")
+            raise ValueError(f"Experiment not found: Class {cls.__name__} in module {cls.__module__} contains no function called {f_name}.")
 
     @classmethod
     def plot_list_of_GFigure(cls, l_G, save_pdf=False, experiment_id=None):
