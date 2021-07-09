@@ -9,5 +9,5 @@ cd $GSIM_DIR
 
 cp $INSTALLATION_FOLDER"/run_experiment.py" .. 
 
-mkdir -p ../Experiments
-cp $INSTALLATION_FOLDER"/example_experiments.py" ../Experiments/
+mkdir -p ../experiments
+cp $INSTALLATION_FOLDER"/example_experiments.py" ../experiments/

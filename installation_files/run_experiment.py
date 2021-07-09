@@ -24,9 +24,9 @@ import gsim
 
 ########################################################################
 # Select experiment file:
-from Experiments.example_experiments import ExperimentSet
-# from Experiments.my_favorite_experiments import ExperimentSet
-# from Experiments.top_experiments_ever import ExperimentSet
+from experiments.example_experiments import ExperimentSet
+# from experiments.my_favorite_experiments import ExperimentSet
+# from experiments.top_experiments_ever import ExperimentSet
 
 ########################################################################
 

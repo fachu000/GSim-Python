@@ -14,7 +14,7 @@ $ bash gsim/install.sh
 Create your experiments as functions in a module in the folder
 Experiments. There is an example of such a module there.
 
-To run experiment 1002 in Experiments.example_experiments, type
+To run experiment 1002 in experiments.example_experiments, type
 
 $ python run_experiment.py 1002
 
