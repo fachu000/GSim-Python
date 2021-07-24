@@ -1,3 +1,6 @@
+from datetime import timedelta, datetime
+
+
 def time_to_str(time_delta):
 
     hours = time_delta.seconds // 3600
@@ -82,3 +85,10 @@ def instr(
                   expand_lists=expand_lists)
     else:
         nprint(f"{obj.__class__}")
+
+d_timers = dict()
+def startTimer(name):
+    d_timers[name] = datetime.now()
+    
+def printTimer(name):
+    print(f"{name} = {time_to_str(datetime.now() - d_timers[name])}")
