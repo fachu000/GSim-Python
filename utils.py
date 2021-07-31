@@ -1,5 +1,7 @@
 from datetime import timedelta, datetime
 
+def xor(a, b):
+    return bool(a) ^ bool(b)
 
 def time_to_str(time_delta):
 
