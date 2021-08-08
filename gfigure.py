@@ -290,10 +290,11 @@ class Subplot:
       elif len(l_style) == 1:
           l_style = l_style * len(l_xaxis)
       else:
-          if len(l_style) < len(l_xaxis):
-              set_trace()
-          assert len(l_style) >= len(l_xaxis), "The length of `style` must be"\
+        #   if len(l_style) < len(l_xaxis):
+        #       raise ValueError("The length of the styles argument needs to be at least the number of curves.")
+        assert len(l_style) >= len(l_xaxis), "The length of `style` must be"\
               " either 1 or no less than the number of curves"
+        l_style = l_style[0:len(l_xaxis)]
 
       # Process the legend
       assert ((type(legend) == tuple) or (type(legend) == list)
@@ -336,7 +337,7 @@ class Subplot:
       l_curve = []
       for xax, yax, ylow, yup, stl, leg in zip(l_xaxis, l_yaxis, l_ylower,
                                                l_yupper,
-                                               l_style[0:len(l_xaxis)],
+                                               l_style,
                                                legend):
           l_curve.append(
               Curve(xaxis=xax,
