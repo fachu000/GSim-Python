@@ -466,6 +466,8 @@ class Subplot:
                 **kwargs)
 
         if not Curve.legend_is_empty(self.l_curves):
+            if not hasattr(self, "legend_loc"):
+                self.legend_loc = None # backwards compatibility
             plt.legend(loc=self.legend_loc)
 
         # Axis labels
