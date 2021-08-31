@@ -3,6 +3,8 @@ import matplotlib.pyplot as plt
 from IPython.core.debugger import set_trace
 import copy
 import numpy as np
+
+title_to_caption = False
 """
 
 The easiest way to learn how to use this module is to run the examples
@@ -513,6 +515,8 @@ class Subplot:
 
 
 class GFigure:
+    str_caption = None
+
     def __init__(self,
                  *args,
                  figsize=None,
@@ -700,7 +704,7 @@ class GFigure:
                 **kwargs)
 
     def plot(self):
-
+        
         # backwards compatibility
         if "figsize" not in dir(self):
             figsize = None
@@ -723,11 +727,18 @@ class GFigure:
                 self.num_subplot_rows = int(
                     np.ceil(num_axes / self.num_subplot_columns))
 
-        # Actual plotting operation
+        # Process title
+        if title_to_caption and (len(self.l_subplots)==1):
+            self.str_caption = self.l_subplots[0].title
+            self.l_subplots[0].title = ""
+            print("Caption: ", self.str_caption)
+
+        # Actual plotting operation        
         for index, subplot in enumerate(self.l_subplots):
             axis = plt.subplot(self.num_subplot_rows, self.num_subplot_columns,
                                index + 1)
             if self.l_subplots[index] is not None:
+                
                 self.l_subplots[index].plot(axis=axis)
 
         # Layout
@@ -780,6 +791,18 @@ class GFigure:
 
         return gfig
 
+    def export(self, base_filename):
+        # Save figure to pdf
+        filename_pdf = base_filename + ".pdf"
+        print(f"Exporting GFigure as {filename_pdf}")
+        plt.savefig(filename_pdf)
+
+        # Save caption if applicable
+        if self.str_caption is not None:
+            basename_txt = base_filename + ".txt"
+            print(f"Saving caption as {basename_txt}")
+            with open(basename_txt,"w") as f:
+                f.write(self.str_caption)
 
 def example_figures(ind_example):
 

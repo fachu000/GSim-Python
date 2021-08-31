@@ -76,11 +76,10 @@ class AbstractExperimentSet:
             G.plot()
             if save_pdf:
                 if len(l_G)>1:
-                    file_name = f_name + "-" + str(ind) + ".pdf"
+                    file_name = f_name + "-" + str(ind) 
                 else:
-                    file_name = f_name + ".pdf"
-                print(f"Saving figure as {target_folder + file_name}")
-                plt.savefig(target_folder + file_name)
+                    file_name = f_name 
+                G.export(target_folder + file_name)
         plt.show()
 
     @classmethod
