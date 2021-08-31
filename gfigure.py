@@ -5,6 +5,7 @@ import copy
 import numpy as np
 
 title_to_caption = False
+default_figsize = None # `None` lets plt choose
 """
 
 The easiest way to learn how to use this module is to run the examples
@@ -532,6 +533,15 @@ class GFigure:
       by the user after constructing the GFigure object without altering the
       figure.
 
+      FIGURE
+      ======
+
+       figsize: can be a tuple, e.g. (10, 20). If None and the global `default_figsize` is 
+            not None, the value of the latter is used.
+
+      `layout`: can be "", "tight", or "constrained". See pyplot documentation.
+
+
       SUBPLOT ARGUMENTS:
       =================
 
@@ -630,11 +640,7 @@ class GFigure:
           The values of the properties of GFigure with the same name
           can be specified subsequently.
 
-      LAYOUT
-      ======
-
-      `layout`: can be "", "tight", or "constrained". See pyplot documentation.
-
+      
       """
 
         # Create a subplot if the arguments specify one
@@ -710,6 +716,8 @@ class GFigure:
             figsize = None
         else:
             figsize = self.figsize
+        if figsize is None:
+            figsize = default_figsize
 
         F = plt.figure(figsize=figsize)
 
