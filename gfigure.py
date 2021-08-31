@@ -798,7 +798,7 @@ class GFigure:
         plt.savefig(filename_pdf)
 
         # Save caption if applicable
-        if self.str_caption is not None:
+        if hasattr(self,"str_caption") and self.str_caption is not None:
             basename_txt = base_filename + ".txt"
             print(f"Saving caption as {basename_txt}")
             with open(basename_txt,"w") as f:
