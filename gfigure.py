@@ -5,7 +5,7 @@ import copy
 import numpy as np
 
 title_to_caption = False
-default_figsize = None # `None` lets plt choose
+default_figsize = None  # `None` lets plt choose
 """
 
 The easiest way to learn how to use this module is to run the examples
@@ -470,7 +470,7 @@ class Subplot:
 
         if not Curve.legend_is_empty(self.l_curves):
             if not hasattr(self, "legend_loc"):
-                self.legend_loc = None # backwards compatibility
+                self.legend_loc = None  # backwards compatibility
             plt.legend(loc=self.legend_loc)
 
         # Axis labels
@@ -536,8 +536,9 @@ class GFigure:
       FIGURE
       ======
 
-       figsize: can be a tuple, e.g. (10, 20). If None and the global `default_figsize` is 
-            not None, the value of the latter is used.
+       figsize: can be a tuple of format (width, height), e.g. (20., 10.). If
+            None and the global `default_figsize` is not None, the value of the
+            latter is used.
 
       `layout`: can be "", "tight", or "constrained". See pyplot documentation.
 
@@ -640,7 +641,7 @@ class GFigure:
           The values of the properties of GFigure with the same name
           can be specified subsequently.
 
-      
+
       """
 
         # Create a subplot if the arguments specify one
@@ -710,7 +711,7 @@ class GFigure:
                 **kwargs)
 
     def plot(self):
-        
+
         # backwards compatibility
         if "figsize" not in dir(self):
             figsize = None
@@ -736,17 +737,17 @@ class GFigure:
                     np.ceil(num_axes / self.num_subplot_columns))
 
         # Process title
-        if title_to_caption and (len(self.l_subplots)==1):
+        if title_to_caption and (len(self.l_subplots) == 1):
             self.str_caption = self.l_subplots[0].title
             self.l_subplots[0].title = ""
             print("Caption: ", self.str_caption)
 
-        # Actual plotting operation        
+        # Actual plotting operation
         for index, subplot in enumerate(self.l_subplots):
             axis = plt.subplot(self.num_subplot_rows, self.num_subplot_columns,
                                index + 1)
             if self.l_subplots[index] is not None:
-                
+
                 self.l_subplots[index].plot(axis=axis)
 
         # Layout
@@ -806,11 +807,12 @@ class GFigure:
         plt.savefig(filename_pdf)
 
         # Save caption if applicable
-        if hasattr(self,"str_caption") and self.str_caption is not None:
+        if hasattr(self, "str_caption") and self.str_caption is not None:
             basename_txt = base_filename + ".txt"
             print(f"Saving caption as {basename_txt}")
-            with open(basename_txt,"w") as f:
+            with open(basename_txt, "w") as f:
                 f.write(self.str_caption)
+
 
 def example_figures(ind_example):
 
