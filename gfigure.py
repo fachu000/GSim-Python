@@ -45,6 +45,7 @@ class Curve:
                  ylower=[],
                  yupper=[],
                  style=None,
+                 mode="plot",
                  legend_str=""):
         """
 
@@ -62,6 +63,7 @@ class Curve:
 
       ylower, yupper: [] or lists of a numeric type with the same length as yaxis.
 
+      mode : can be 'plot' or 'stem'
 
       2. For 3D plots:
       ----------------
@@ -124,6 +126,7 @@ class Curve:
         self.yupper = yupper
         self.style = style
         self.legend_str = legend_str
+        self.mode = mode
 
         # 3D
         self.zaxis = zaxis
@@ -153,19 +156,34 @@ class Curve:
             if self.yupper:
                 plot_band(self.yaxis, self.yupper)
 
+        # if type(self.xaxis) == list and len(self.xaxis):
+        #     if self.style:
+        #         plt.plot(self.xaxis,
+        #                  self.yaxis,
+        #                  self.style,
+        #                  label=self.legend_str)
+        #     else:
+        #         plt.plot(self.xaxis, self.yaxis, label=self.legend_str, use_line_collection=True)
+        # else:
+        #     if self.style:
+        #         plt.plot(self.yaxis, self.style, label=self.legend_str)
+        #     else:
+        #         plt.plot(self.yaxis, label=self.legend_str)
         if type(self.xaxis) == list and len(self.xaxis):
-            if self.style:
-                plt.plot(self.xaxis,
-                         self.yaxis,
-                         self.style,
-                         label=self.legend_str)
-            else:
-                plt.plot(self.xaxis, self.yaxis, label=self.legend_str)
+            axis_args = (self.xaxis, self.yaxis)
         else:
-            if self.style:
-                plt.plot(self.yaxis, self.style, label=self.legend_str)
-            else:
-                plt.plot(self.yaxis, label=self.legend_str)
+            axis_args = (self.yaxis, )
+
+        if hasattr(self, 'mode') and self.mode == 'stem':
+
+            def plot_fun(*args, **kwargs):
+                return plt.stem(*args, **kwargs, use_line_collection=True)
+        else:
+            plot_fun = plt.plot
+
+        style = self.style if self.style else "-"
+
+        plot_fun(*axis_args, style, label=self.legend_str)
 
     def _plot_3D(self, axis=None, interpolation="none", zlim=None):
 
@@ -247,6 +265,7 @@ class Subplot:
                   ylower=[],
                   yupper=[],
                   styles=[],
+                  mode='plot',
                   legend=tuple()):
         """
       Adds one or multiple curves to `self`. See documentation of GFigure.__init__
@@ -255,7 +274,7 @@ class Subplot:
         if zaxis is None:
             # 2D figure
             self.l_curves += Subplot._l_2D_curves_from_input_args(
-                xaxis, yaxis, ylower, yupper, styles, legend)
+                xaxis, yaxis, ylower, yupper, styles, legend, mode=mode)
         else:
             # 3D figure
             self.l_curves.append(
@@ -265,7 +284,7 @@ class Subplot:
                       zinterpolation=zinterpolation))
 
     def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
-                                     legend):
+                                     legend, mode):
 
         # Process the subplot input.  Each entry of l_xaxis can be
         # either None (use default x-axis) or a list of float. Each
@@ -338,7 +357,8 @@ class Subplot:
                       ylower=ylow,
                       yupper=yup,
                       style=stl,
-                      legend_str=leg))
+                      legend_str=leg,
+                      mode=mode))
         return l_curve
 
     def _list_from_style_argument(style_arg):
@@ -572,20 +592,33 @@ class GFigure:
       1. 2D plots
          -----------
 
-      xaxis and yaxis: (a) To specify only one curve: - `yaxis` can be a 1D
-          np.ndarray, a 1D tf.Tensor or a list of a numeric type - `xaxis` can
-          be None, a list of a numeric type, or a 1D np.array of the same length
-          as `yaxis`. (b) To specify one or more curves: - `yaxis` can be: -> a
-          list whose elements are as described in (a) -> M x N np.ndarray or
-          tf.Tensor. Each row corresponds to a curve. - `xaxis` can be either as
-          in (a), so all curves share the same X-axis points, or -> a list whose
-          elements are as described in (a) -> Mx x N np.ndarray. Each row
-          corresponds to a curve. Mx must be either M or 1. ylower and yupper:
-          specify a shaded area around the curve, used e.g. for confidence
-          bounds. The area between ylower and yaxis as well as the area between
-          yaxis and yupper are shaded. Their format is the same as yaxis.
+      xaxis and yaxis: 
+
+        (a) To specify only one curve: 
+
+            - `yaxis` can be a 1D np.ndarray, a 1D tf.Tensor or a list of a numeric
+            type 
+
+            - `xaxis` can be None, a list of a numeric type, or a 1D np.array
+            of the same length as `yaxis`. 
+
+        (b) To specify one or more curves: 
+
+            - `yaxis` can be: -> a list whose elements are as described in (a) -> M
+            x N np.ndarray or tf.Tensor. Each row corresponds to a curve. 
+
+            - `xaxis` can be either as in (a), so all curves share the same X-axis
+            points, or -> a list whose elements are as described in (a) -> Mx x N
+            np.ndarray. Each row corresponds to a curve. Mx must be either M or 1.
+          
+      ylower and yupper: specify a shaded area around the curve, used e.g.
+        for confidence bounds. The area between ylower and yaxis as well as
+        the area between yaxis and yupper are shaded. Their format is the same
+        as yaxis.
 
       zaxis: None
+
+      mode: it can be 'plot' (default) or 'stem'
 
       2. 3D plots
          -----------
@@ -604,6 +637,7 @@ class GFigure:
       global_color_bar: if True, one colorbar for the entire figure. 
 
       global_color_bar_label: str indicating the label of the global colorbar.
+
       global_color_bar_position: vector with four entries.
 
       color_bar: a colorbar only for the specified axis.
