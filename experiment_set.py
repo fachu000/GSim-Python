@@ -94,6 +94,7 @@ class AbstractExperimentSet:
         else:
             if inspect:
                 print("The GFigures are available as `l_G`.")
+                print("Press 'c' to continue and plot. ")
                 set_trace()
             cls.plot_list_of_GFigure(l_G, save_pdf=save_pdf, experiment_id=experiment_id)
         
