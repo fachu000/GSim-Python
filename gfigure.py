@@ -109,7 +109,12 @@ class Curve:
             assert_type_and_shape(zaxis, "zaxis")
             if xaxis.shape != zaxis.shape or yaxis.shape != zaxis.shape:
                 raise ValueError(
-                    "Arguments xaxis and zaxis must be of the same shape as zaxis"
+                    f"""Arguments xaxis and zaxis must be of the same shape as zaxis, but they have the following shapes:
+
+                        xaxis -> {xaxis.shape}
+                        yaxis -> {yaxis.shape}
+                        zaxis -> {zaxis.shape}                    
+                    """
                 )
 
         if (style is not None) and (type(style) != str):
