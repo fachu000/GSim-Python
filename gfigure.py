@@ -552,7 +552,7 @@ class GFigure:
                  global_color_bar=False,
                  global_color_bar_label="",
                  global_color_bar_position=[0.85, 0.35, 0.02, 0.5],
-                 layout="",
+                 layout="tight",
                  **kwargs):
         """Arguments of mutable types are (deep) copied so they can be modified
       by the user after constructing the GFigure object without altering the
@@ -566,7 +566,8 @@ class GFigure:
             latter is used.
 
       `layout`: can be "", "tight", or "constrained". See pyplot documentation.
-
+       
+                Since April 2022, layout='tight' is set by default.
 
       SUBPLOT ARGUMENTS:
       =================

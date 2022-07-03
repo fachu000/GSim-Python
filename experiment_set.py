@@ -11,6 +11,10 @@ OUTPUT_DATA_FOLDER = "./output/"
 
 
 class AbstractExperimentSet:
+
+    def experiment_id_to_f_name(experiment_id):
+        return f"{EXPERIMENT_FUNCTION_BASE_NAME}{experiment_id}"
+
     @classmethod
     def run_experiment(cls, experiment_id, l_args=[]):
         """ Executes the experiment function with identifier <ind_experiment>
@@ -21,7 +25,7 @@ class AbstractExperimentSet:
                 Typical usage: number of iterations.
         """
 
-        f_name = f"{EXPERIMENT_FUNCTION_BASE_NAME}{experiment_id}"
+        f_name = cls.experiment_id_to_f_name(experiment_id)
 
         if f_name in dir(cls):
             start_time = datetime.now()
@@ -51,7 +55,7 @@ class AbstractExperimentSet:
             if len(l_G) == 0:
                 print("The experiment returned no GFigures.")
             else:
-                cls.store_fig(l_G, f_name)
+                cls.store_fig(l_G, experiment_id)
                 cls.plot_list_of_GFigure(l_G)
 
         else:
@@ -94,8 +98,10 @@ class AbstractExperimentSet:
         else:
             if inspect:
                 print("The GFigures are available as `l_G`.")
-                print("Press 'c' to continue and plot. ")
+                print("Press 'c' to continue, save, and plot. ")
+                print("You can type `interact` to enter interactive mode and `Ctr D` to exit. ")
                 set_trace()
+                cls.store_fig(l_G, experiment_id)
             cls.plot_list_of_GFigure(l_G, save_pdf=save_pdf, experiment_id=experiment_id)
         
 
@@ -105,7 +111,7 @@ class AbstractExperimentSet:
         return OUTPUT_DATA_FOLDER + cls.__module__.split(".")[-1] + os.sep
 
     @classmethod
-    def store_fig(cls, l_G, f_name):
+    def store_fig(cls, l_G, experiment_id):
 
         # Create the folder if it does not exist
         if not os.path.isdir(OUTPUT_DATA_FOLDER):
@@ -113,7 +119,7 @@ class AbstractExperimentSet:
         target_folder = cls.experiment_set_data_folder()
         if not os.path.isdir(target_folder):
             os.mkdir(target_folder)
-        file_name = f_name + ".pk"
+        file_name = cls.experiment_id_to_f_name(experiment_id) + ".pk"
 
         print("Storing figure as %s" % target_folder + file_name)
         pickle.dump(l_G, open(target_folder + file_name, "wb"))
