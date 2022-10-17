@@ -4,6 +4,7 @@
 import sys
 import os
 from IPython.core.debugger import set_trace
+import importlib
 
 
 def initialize():
@@ -21,12 +22,12 @@ def initialize():
 initialize()
 
 import gsim
+import gsim_conf
 
-########################################################################
-# Select experiment file:
-from experiments.example_experiments import ExperimentSet
-# from experiments.my_favorite_experiments import ExperimentSet
-# from experiments.top_experiments_ever import ExperimentSet
+print("Loading modules...")
+module = importlib.import_module(gsim_conf.module_name)
+ExperimentSet = getattr(module, "ExperimentSet")
+print("done")
 
 ########################################################################
 
@@ -83,3 +84,18 @@ if __name__ == '__main__':
         print(
             f"The permisions of the files and folders in {gsim.OUTPUT_DATA_FOLDER} could not be properly set, possibly because of your operating system. Please do not use the script sync_data until this issue is fixed"
         )
+
+###### Python API ######
+""" 
+To run an experiment from the iPython shell:
+
+%load_ext autoreload
+%autoreload 2
+from run_experiment import run
+run(1001)
+
+"""
+
+
+def run(name, *args, **kwargs):
+    ExperimentSet.run_experiment(name, *args, **kwargs)
