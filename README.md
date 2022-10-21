@@ -46,6 +46,23 @@ how to use GFigure.
 
 Pull requests are welcome!!
 
+## Cloning a repository that contains GSim
+
+First clone the repository. For example:
+
+```
+$ git clone xyz_repository_url
+```
+
+Then do the following:
+```
+$ cd xyz_repository_folder
+$ cd gsim
+$ git submodule init
+$ git submodule update
+$ cd ..
+```
+
 ## Visual Studio Code
 
 For debugging, it is comfortable to use the following `launch.json`:
