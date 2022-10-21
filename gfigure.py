@@ -37,6 +37,7 @@ def is_number(num):
 
 
 class Curve:
+
     def __init__(self,
                  xaxis=None,
                  yaxis=[],
@@ -114,8 +115,7 @@ class Curve:
                         xaxis -> {xaxis.shape}
                         yaxis -> {yaxis.shape}
                         zaxis -> {zaxis.shape}                    
-                    """
-                )
+                    """)
 
         if (style is not None) and (type(style) != str):
             raise TypeError("`style` must be of type str or None")
@@ -149,6 +149,7 @@ class Curve:
             self._plot_2D()
 
     def _plot_2D(self):
+
         def plot_band(lower, upper):
             if self.xaxis:
                 plt.fill_between(self.xaxis, lower, upper, alpha=0.2)
@@ -215,6 +216,7 @@ class Curve:
 
 
 class Subplot:
+
     def __init__(self,
                  title="",
                  xlabel="",
@@ -278,8 +280,13 @@ class Subplot:
 
         if zaxis is None:
             # 2D figure
-            self.l_curves += Subplot._l_2D_curves_from_input_args(
-                xaxis, yaxis, ylower, yupper, styles, legend, mode=mode)
+            self.l_curves += Subplot._l_2D_curves_from_input_args(xaxis,
+                                                                  yaxis,
+                                                                  ylower,
+                                                                  yupper,
+                                                                  styles,
+                                                                  legend,
+                                                                  mode=mode)
         else:
             # 3D figure
             self.l_curves.append(
@@ -390,7 +397,9 @@ class Subplot:
       Both returned lists can be empty if no curve is specified.
 
       """
+
         def unify_format(axis):
+
             def ndarray_to_list(arr):
                 """Returns a list of lists."""
                 assert (type(arr) == np.ndarray)
@@ -958,6 +967,16 @@ def example_figures(ind_example):
 
         for ind in range(0, 6):
             my_simulation()
+
+    elif ind_example == 8:
+        # Scatter plot
+        v_x = np.linspace(0, 10, 200)
+        v_y = v_x + np.random.normal(size=(len(v_x), ))
+        G = GFigure(xaxis=v_x,
+                    yaxis=v_y,
+                    styles=['.'],
+                    xlabel='x',
+                    ylabel='y=x+w')
 
     G.plot()
     plt.show()
