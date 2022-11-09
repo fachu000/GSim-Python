@@ -16,7 +16,7 @@ def initialize():
         )
         quit()
 
-    sys.path.insert(1, './gsim/')
+    # sys.path.insert(1, './gsim/') # no longer necessary
 
 
 initialize()
