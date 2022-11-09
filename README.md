@@ -3,15 +3,10 @@
 General-purpose simulation environment for Python.
 
 
-To download, cd to your git repository. Once there, type this:
+To install GSim into your git repository, cd to the folder of your repository and type
 
 ```
 $ git submodule add https://github.com/fachu000/GSim-Python.git ./gsim
-```
-
-To install:
-
-```
 $ bash gsim/install.sh
 ```
 
