@@ -47,6 +47,9 @@ echo "Welcome to GSim-Python"
 echo " "
 echo "Installing GSim-Python..."
 
+# The following syncs the submodules when doing
+git config submodule.recurse true
+
 # run_experiment.py
 RUN_EXPERIMENT="run_experiment.py"
 if [ ! -f $RUN_EXPERIMENT ]
