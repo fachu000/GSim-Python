@@ -13,7 +13,7 @@ function ignore_file {
         echo "The file $1 is already ignored by .gitignore";
     else
         echo "Adding $1 to .gitignore...";
-        echo -e "\n\n# Added by GSim$1" >> .gitignore
+        echo -e "\n\n# Added by GSim\n$1" >> .gitignore
     fi
 }
 
