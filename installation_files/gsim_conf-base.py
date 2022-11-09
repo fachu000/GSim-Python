@@ -1,8 +1,11 @@
-""" gsim_conf.py is intended to be ignored in .gitignore. It is a configuration
-file specific to each user.
+""" 
+This file contains configuration specific to each user. 
 
-gsim_conf-base.py can be used to create a template for gsim_conf.py specific to
-each project. """
+It is intended to be ignored in .gitignore.
+
+More information in gsim/install.sh
+
+"""
 
 # Select an experiment file:
 module_name = "experiments.example_experiments"
@@ -11,7 +14,7 @@ module_name = "experiments.example_experiments"
 import gsim.gfigure
 
 gsim.gfigure.title_to_caption = True
-gsim.gfigure.default_figsize = (5.5, 3.5) # `None` to let plt choose.
+gsim.gfigure.default_figsize = (5.5, 3.5)  # `None` to let plt choose.
 
 #log.setLevel(logging.DEBUG)
 import logging.config
