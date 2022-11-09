@@ -17,6 +17,14 @@ function ignore_file {
     fi
 }
 
+if [ ! -f "gsim/install.sh" ]
+then
+    echo "ERROR: You must enter the root folder of your repository before executing this file."
+    echo " Synopsis:"
+    echo "    $ bash gsim/install.sh  "
+    exit 1
+fi
+
 INSTALLATION_FOLDER="installation_files"
 
 GSIM_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )/"
