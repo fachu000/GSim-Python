@@ -44,9 +44,9 @@ Pull requests are welcome!!
 
 Fast way:
 ```
-git clone --recurse-submodules <url_of_the_repo>
-cd <folder_of_the_repo>
-bash gsim/install.sh
+$ git clone --recurse-submodules <url_of_the_repo>
+$ cd <folder_of_the_repo>
+$ bash gsim/install.sh
 ```
 
 If you have already cloned the repository and forgot the `--recurse-submodules`, just cd to the main folder of the cloned repo and type
