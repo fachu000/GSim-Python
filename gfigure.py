@@ -8,8 +8,12 @@ title_to_caption = False
 default_figsize = None  # `None` lets plt choose
 """
 
-The easiest way to learn how to use this module is to run the examples
-at the end.
+The easiest way to learn how to use this module is to run the examples at the
+end of this file. To do so, cd to the main folder of your repo and open a Python
+terminal. Then, write the following:
+
+from gsim.gfigure import plot_example_figure
+plot_example_figure(<figure_number>)
 
 """
 """ 
@@ -863,7 +867,12 @@ class GFigure:
                 f.write(self.str_caption)
 
 
-def example_figures(ind_example):
+def plot_example_figure(ind_example):
+    """
+    This is example code to learn how to use GFigure. See the description at the
+    top of this file. 
+    
+    """
 
     v_x = np.linspace(0, 10, 20)
     v_y1 = v_x**2 - v_x + 3
@@ -878,6 +887,7 @@ def example_figures(ind_example):
                     ylabel="f(x)",
                     title="Parabolas",
                     legend="P1")
+
     elif ind_example == 2:
         # Example with three curves on one subplot
         G = GFigure(xaxis=v_x,
@@ -888,6 +898,7 @@ def example_figures(ind_example):
                     legend="P1")
         G.add_curve(xaxis=v_x, yaxis=v_y2, legend="P2")
         G.add_curve(xaxis=v_x, yaxis=v_y3, legend="P3")
+
     elif ind_example == 3:
         # Typical scheme where a simulation function produces each
         # curve.
@@ -901,6 +912,7 @@ def example_figures(ind_example):
         G = GFigure(xlabel="x", ylabel="f(x)", title="Parabola")
         for ind in range(0, 6):
             my_simulation()
+
     elif ind_example == 4:
         # Example with two subplots
         G = GFigure(xaxis=v_x,
@@ -916,12 +928,14 @@ def example_figures(ind_example):
             yaxis=v_y3,
             legend="P3",
         )
+
     elif ind_example == 5:
         # Example with a large multiplot
         G = GFigure(num_subplot_rows=4)
         for ind in range(0, 12):
             G.select_subplot(ind, xlabel="x", ylabel="f(x)", title="Parabolas")
             G.add_curve(xaxis=v_x, yaxis=v_y1, legend="P1", styles="r")
+
     elif ind_example == 6:
         # Typical scheme where a simulation function produces each subplot
         def my_simulation():
@@ -989,4 +1003,4 @@ $ python3 gfigure.py <example_index>
             
 where <example_index> is an integer. See function `example_figures`.""")
     else:
-        example_figures(int(sys.argv[1]))
+        plot_example_figure(int(sys.argv[1]))
