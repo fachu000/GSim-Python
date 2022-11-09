@@ -47,7 +47,7 @@ echo "Welcome to GSim-Python"
 echo " "
 echo "Installing GSim-Python..."
 
-# The following syncs the submodules when doing
+# The following sets git to sync the submodules when doing `git pull`
 git config submodule.recurse true
 
 # run_experiment.py
