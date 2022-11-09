@@ -2,7 +2,6 @@
 
 General-purpose simulation environment for Python.
 
-
 To install GSim into your git repository, cd to the folder of your repository and type
 
 ```
@@ -43,19 +42,20 @@ Pull requests are welcome!!
 
 ## Cloning a repository that contains GSim
 
-First clone the repository. For example:
+Fast way:
+```
+$ git clone --recurse-submodules <url_of_the_repo>
+$ cd <folder_of_the_repo>
+$ bash gsim/install.sh
+```
 
+If you have already cloned the repository and forgot the `--recurse-submodules`, just cd to the main folder of the cloned repo and type
 ```
-$ git clone xyz_repository_url
-```
-
-Then do the following:
-```
-$ cd xyz_repository_folder
 $ cd gsim
 $ git submodule init
 $ git submodule update
 $ cd ..
+$ bash gsim/install.sh
 ```
 
 ## Visual Studio Code
