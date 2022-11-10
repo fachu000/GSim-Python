@@ -35,7 +35,7 @@ $ python run_experiment.py -p 1002
 GFigure offers a neater interface than matplotlib, whose goal was to
 resemble the interface of MATLAB. Figures are collections of
 subfigures, subfigures are collections of curves. Simple to
-understand. See gsim.gfigure.plot_example_figure for a small tutorial on
+understand. See the description at the top of `gsim.gfigure` for a small tutorial on
 how to use GFigure.
 
 Pull requests are welcome!!
