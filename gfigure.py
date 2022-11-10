@@ -769,6 +769,8 @@ class GFigure:
         - xaxis and yaxis are None or []. In this case, it is understood that
           the user wants to visualize the entries of a matrix. Thus, the (x,y)
           coordinates corresponding to zaxis[i,j] are respectively j and i.
+          Arguments xlabel and ylabel respectively correspond to columns and
+          rows. 
       
 
         2b. Rest of arguments
@@ -781,16 +783,13 @@ class GFigure:
       'hermite', 'kaiser', 'quadric', 'catrom', 'gaussian', 'bessel',
       'mitchell', 'sinc', 'lanczos'.
 
-      global_color_bar: if True, one colorbar for the entire figure. 
+      color_bar: If True, a color bar is created for the specified axis.
 
-      global_color_bar_label: str indicating the label of the global colorbar.
+      global_color_bar: if True, one color bar for the entire figure. 
+
+      global_color_bar_label: str indicating the label of the global color bar.
 
       global_color_bar_position: vector with four entries.
-
-      color_bar: a colorbar only for the specified axis.
-
-      
-
 
       3. Others
          ---------
