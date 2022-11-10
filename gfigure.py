@@ -310,6 +310,7 @@ class Subplot:
                  ylim=None,
                  zlim=None,
                  legend_loc=None,
+                 create_curves=True,
                  **kwargs):
         """
       For a description of the arguments, see GFigure.__init__
@@ -328,7 +329,8 @@ class Subplot:
         self.legend_loc = legend_loc
 
         self.l_curves = []
-        self.add_curve(**kwargs)
+        if create_curves:
+            self.add_curve(**kwargs)
 
     def __repr__(self):
         return f"<Subplot objet with title=\"{self.title}\", len(self.l_curves)={len(self.l_curves)} curves>"
@@ -383,10 +385,10 @@ class Subplot:
     def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
                                      legend, mode):
 
-        # Process the subplot input.  Each entry of l_xaxis can be
+        # Process the subplot input.  Each entry of xaxis can be
         # either None (use default x-axis) or a list of float. Each
-        # entry of l_yaxis is a list of float. Both l_xaxis and
-        # l_yaxis will have the same length.
+        # entry of yaxis is a list of float. Both xaxis and
+        # yaxis will have the same length.
         l_xaxis, l_yaxis = Subplot._list_from_axis_arguments(xaxis, yaxis)
         # Each entry of `l_ylower` and `l_yupper` is either None (do
         # not shade any area) or a list of float.
@@ -873,9 +875,10 @@ class GFigure:
             self.l_subplots.append(Subplot(**kwargs))
 
     def select_subplot(self, ind_subplot, **kwargs):
-        # Creates the `ind_subplot`-th subplot if it does not exist and
-        # selects it. Subplot keyword parameters can also be provided;
-        # see GFigure.
+        """Creates the `ind_subplot`-th subplot if it does not exist and
+        selects it. Subplot keyword parameters can also be provided (see
+        GFigure), but parameters to create a curve are ignored.        
+        """
 
         self.ind_active_subplot = ind_subplot
 
@@ -887,7 +890,8 @@ class GFigure:
 
         # Create if it does not exist
         if self.l_subplots[self.ind_active_subplot] is None:
-            self.l_subplots[self.ind_active_subplot] = Subplot(**kwargs)
+            self.l_subplots[self.ind_active_subplot] = Subplot(
+                create_curves=False, **kwargs)
         else:
             self.l_subplots[self.ind_active_subplot].update_properties(
                 **kwargs)
