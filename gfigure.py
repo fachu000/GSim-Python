@@ -9,11 +9,12 @@ default_figsize = None  # `None` lets plt choose
 """
 
 The easiest way to learn how to use this module is to run the examples at the
-end of this file. To do so, cd to the main folder of your repo and open a Python
-terminal. Then, write the following:
+end of this file. To do so, cd to the folder gsim and type:
 
-from gsim.gfigure import plot_example_figure
-plot_example_figure(<figure_number>)
+python3 gfigure.py <figure_number>
+
+where <figure_number> is an integer. See the code and possible values of
+<figure_number> in `plot_example_figure` below.
 
 """
 """ 
@@ -50,7 +51,7 @@ class Curve:
                  ylower=[],
                  yupper=[],
                  style=None,
-                 mode="plot",
+                 mode=None,
                  legend_str=""):
         """
 
@@ -101,25 +102,52 @@ class Curve:
                     "`xaxis` must be a list of numeric entries or None")
         else:
             # 3D plot
-            def assert_type_and_shape(arg, name):
-                if not isinstance(arg, np.ndarray):
+
+            # zaxis
+            if not isinstance(zaxis, np.ndarray):
+                raise TypeError(f"Argument `zaxis` must be of class np.array.")
+            if zaxis.ndim != 2:
+                raise ValueError(f"Argument `zaxis` must be of dimension 2. ")
+
+            num_rows, num_cols = zaxis.shape
+
+            # xaxis and yaxis
+            def is_empty(arg):
+                return (arg is None) or ((type(arg) == list) and
+                                         (len(arg) == 0))
+
+            if is_empty(xaxis):
+                assert is_empty(
+                    yaxis), "If `xaxis` is empty, then `yaxis` must be empty"
+            else:
+                if isinstance(xaxis, np.ndarray):
+                    assert isinstance(
+                        yaxis, np.ndarray
+                    ), "If `xaxis` is an `np.ndarray`, then `yaxis` must be an `np.ndarray`."
+
+                    # At this point, both are arrays. Just check their dimensions
+                    if xaxis.ndim == 1:
+                        assert yaxis.ndim == 1, "If `xaxis.ndim` is 1, then `yaxis.ndim` must also be 1."
+                        assert xaxis.shape == (
+                            num_cols,
+                        ), f"If `xaxis.ndim` is 1, then `xaxis.shape` must be ({num_cols},). "
+                        assert yaxis.shape == (
+                            num_rows,
+                        ), f"If `yaxis.ndim` is 1, then `yaxis.shape` must be ({num_rows},). "
+                    elif xaxis.ndim == 2:
+                        assert yaxis.ndim == 2, "If `xaxis.ndim` is 2, then `yaxis.ndim` must also be 2."
+                        assert xaxis.shape == (
+                            num_rows, num_cols
+                        ), f"If `xaxis.ndim` is 2, then `xaxis.shape` must be ({num_rows},{num_cols}). "
+                        assert yaxis.shape == (
+                            num_rows, num_cols
+                        ), f"If `yaxis.ndim` is 2, then `yaxis.shape` must be ({num_rows},{num_cols}). "
+                    else:
+                        raise ValueError("`xaxis.ndim` must be either 1 or 2.")
+                else:
                     raise TypeError(
-                        f"Argument {name} must be of class np.array.")
-                if arg.ndim != 2:
-                    raise ValueError(
-                        f"Argument {name} must be of dimension 2. ")
-
-            assert_type_and_shape(xaxis, "xaxis")
-            assert_type_and_shape(yaxis, "yaxis")
-            assert_type_and_shape(zaxis, "zaxis")
-            if xaxis.shape != zaxis.shape or yaxis.shape != zaxis.shape:
-                raise ValueError(
-                    f"""Arguments xaxis and zaxis must be of the same shape as zaxis, but they have the following shapes:
-
-                        xaxis -> {xaxis.shape}
-                        yaxis -> {yaxis.shape}
-                        zaxis -> {zaxis.shape}                    
-                    """)
+                        f"If `xaxis` is not empty, it must be of class `np.ndarray`."
+                    )
 
         if (style is not None) and (type(style) != str):
             raise TypeError("`style` must be of type str or None")
@@ -129,13 +157,13 @@ class Curve:
         # Common
         self.xaxis = xaxis
         self.yaxis = yaxis
+        self.mode = mode
 
         # 2D
         self.ylower = ylower
         self.yupper = yupper
         self.style = style
         self.legend_str = legend_str
-        self.mode = mode
 
         # 3D
         self.zaxis = zaxis
@@ -147,7 +175,7 @@ class Curve:
 
     def plot(self, **kwargs):
 
-        if hasattr(self, "zaxis") and self.zaxis is not None:
+        if self.is_3D:
             self._plot_3D(**kwargs)
         else:
             self._plot_2D()
@@ -184,7 +212,8 @@ class Curve:
         else:
             axis_args = (self.yaxis, )
 
-        if hasattr(self, 'mode') and self.mode == 'stem':
+        if hasattr(self, 'mode') and (self.mode is not None) and (self.mode
+                                                                  == 'stem'):
 
             def plot_fun(*args, **kwargs):
                 return plt.stem(*args, **kwargs, use_line_collection=True)
@@ -199,17 +228,48 @@ class Curve:
 
         assert axis
 
-        self.image = axis.imshow(
-            self.zaxis,
-            interpolation=self.zinterpolation,
-            cmap='jet',
-            # origin='lower',
-            extent=[
-                self.xaxis[-1, 0], self.xaxis[-1, -1], self.yaxis[-1, 0],
-                self.yaxis[0, 0]
-            ],
-            vmax=zlim[1] if zlim else None,
-            vmin=zlim[0] if zlim else None)
+        # Default mode
+        if not hasattr(self, 'mode') or (self.mode is None):
+            self.mode = 'imshow'
+
+        len_y, len_x = self.zaxis.shape
+
+        # xaxis and yaxis
+        if not isinstance(self.xaxis, np.ndarray):
+            v_x = np.arange(len_x)
+            v_y = np.arange(len_y)
+            m_X, m_Y = np.meshgrid(v_x, v_y)
+            m_Z = self.zaxis
+        else:
+            if (self.xaxis.ndim == 1):
+                m_X, m_Y = np.meshgrid(self.xaxis, self.yaxis)
+                m_Z = self.zaxis
+            else:
+                m_X, m_Y = self.xaxis, self.yaxis
+                m_Z = self.zaxis
+
+        if self.mode == 'imshow':
+            self.image = axis.imshow(
+                m_Z,
+                interpolation=self.zinterpolation,
+                cmap='jet',
+                # origin='lower',
+                extent=[m_X[-1, 0], m_X[-1, -1], m_Y[-1, 0], m_Y[0, 0]],
+                vmax=zlim[1] if zlim else None,
+                vmin=zlim[0] if zlim else None)
+        elif self.mode == 'contour3D':
+            axis.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
+        elif self.mode == 'surface':
+            axis.plot_surface(m_X,
+                              m_Y,
+                              m_Z,
+                              rstride=1,
+                              cstride=1,
+                              cmap='viridis',
+                              edgecolor='none')
+
+        else:
+            raise ValueError(f'Unrecognized 3D plotting mode. Got {self.mode}')
 
     def legend_is_empty(l_curves):
 
@@ -217,6 +277,24 @@ class Curve:
             if curve.legend_str != "":
                 return False
         return True
+
+    @property
+    def projection(self):
+        """This is used to create the axes.
+        
+        Note that plt is not consistent. The projection mode can be '3d'
+        (lowercase), but the function is called 'contour3D'. 
+        """
+
+        if self.is_3D:
+            if hasattr(self, 'mode') and (self.mode == 'contour3D'
+                                          or self.mode == 'surface'):
+                return '3d'
+        return None
+
+    @property
+    def is_3D(self):
+        return hasattr(self, "zaxis") and self.zaxis is not None
 
 
 class Subplot:
@@ -267,6 +345,8 @@ class Subplot:
             self.xlabel = kwargs["xlabel"]
         if "ylabel" in kwargs:
             self.ylabel = kwargs["ylabel"]
+        if "zlabel" in kwargs:
+            self.ylabel = kwargs["zlabel"]
 
     def add_curve(self,
                   xaxis=[],
@@ -276,7 +356,7 @@ class Subplot:
                   ylower=[],
                   yupper=[],
                   styles=[],
-                  mode='plot',
+                  mode=None,
                   legend=tuple()):
         """
       Adds one or multiple curves to `self`. See documentation of GFigure.__init__
@@ -297,7 +377,8 @@ class Subplot:
                 Curve(xaxis=xaxis,
                       yaxis=yaxis,
                       zaxis=zaxis,
-                      zinterpolation=zinterpolation))
+                      zinterpolation=zinterpolation,
+                      mode=mode))
 
     def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
                                      legend, mode):
@@ -515,6 +596,9 @@ class Subplot:
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
 
+        if self.projection == '3d' and hasattr(self, 'zlabel') and self.zlabel:
+            plt.gca().set_zlabel(self.zlabel)
+
         # Color bar
         if hasattr(self, "color_bar") and self.color_bar:
             image = self.get_image()
@@ -552,6 +636,22 @@ class Subplot:
                 return curve.image
         return None
 
+    @property
+    def projection(self):
+        """This is used to create the axes."""
+        for curve in self.l_curves:
+            if curve.projection == '3d':
+                return '3d'
+        return None
+
+    @property
+    def is_3D(self):
+        """Returns true if at least one curve is 3D."""
+        for curve in self.l_curves:
+            if curve.is_3D:
+                return True
+        return False
+
 
 class GFigure:
     str_caption = None
@@ -567,9 +667,7 @@ class GFigure:
                  global_color_bar_position=[0.85, 0.35, 0.02, 0.5],
                  layout="tight",
                  **kwargs):
-        """Arguments of mutable types are (deep) copied so they can be modified
-      by the user after constructing the GFigure object without altering the
-      figure.
+        """
 
       FIGURE
       ======
@@ -581,6 +679,9 @@ class GFigure:
       `layout`: can be "", "tight", or "constrained". See pyplot documentation.
        
                 Since April 2022, layout='tight' is set by default.
+
+        One of `num_subplot_rows` or `num_subplot_columns` can be specified for
+        figures with multiple subplots. 
 
       SUBPLOT ARGUMENTS:
       =================
@@ -615,7 +716,8 @@ class GFigure:
 
         (a) To specify only one curve: 
 
-            - `yaxis` can be a 1D np.ndarray, a 1D tf.Tensor or a list of a numeric
+            - `yaxis` can be a 1D np.ndarray, a 1D tf.Tensor or a list of a
+              numeric
             type 
 
             - `xaxis` can be None, a list of a numeric type, or a 1D np.array
@@ -623,30 +725,56 @@ class GFigure:
 
         (b) To specify one or more curves: 
 
-            - `yaxis` can be: -> a list whose elements are as described in (a) -> M
+            - `yaxis` can be: -> a list whose elements are as described in (a)
+              -> M
             x N np.ndarray or tf.Tensor. Each row corresponds to a curve. 
 
-            - `xaxis` can be either as in (a), so all curves share the same X-axis
-            points, or -> a list whose elements are as described in (a) -> Mx x N
-            np.ndarray. Each row corresponds to a curve. Mx must be either M or 1.
+            - `xaxis` can be either as in (a), so all curves share the same
+              X-axis
+            points, or -> a list whose elements are as described in (a) -> Mx x
+            N np.ndarray. Each row corresponds to a curve. Mx must be either M
+            or 1.
           
       ylower and yupper: specify a shaded area around the curve, used e.g.
-        for confidence bounds. The area between ylower and yaxis as well as
-        the area between yaxis and yupper are shaded. Their format is the same
-        as yaxis.
+        for confidence bounds. The area between ylower and yaxis as well as the
+        area between yaxis and yupper are shaded. Their format is the same as
+        yaxis.
 
       zaxis: None
 
       mode: it can be 'plot' (default) or 'stem'
 
       2. 3D plots
-         -----------
+      -----------
 
-      xaxis: M x N numpy array
+        2a. Axes
+        --------
+        
+        zaxis: M x N numpy array. When `mode` is 'imshow', the bottom left of
+        the matrix corresponds to the bottom left of the figure. 
 
-      yaxis: M x N numpy array
+        There are 3 options:
+      
+        - xaxis and yaxis are M x N numpy arrays. The (x,y) coordinates
+          corresponding to zaxis[i,j] are xaxis[i,j] and yaxis[i,j].
 
-      zaxis: M x N numpy array
+        - xaxis and yaxis are vectors of length N and M, respectively. The (x,y)
+          coordinates corresponding to zaxis[i,j] are xaxis[j] and yaxis[M-1-i].
+          This is useful e.g. when we want the matrix to provide the values of a
+          function on the first quadrant, where the bottom-left entry of the
+          matrix would correspond to the origin and yaxis is thought of as a
+          column vector whose bottom entry provides the y-coordinate of the
+          origin. 
+
+        - xaxis and yaxis are None or []. In this case, it is understood that
+          the user wants to visualize the entries of a matrix. Thus, the (x,y)
+          coordinates corresponding to zaxis[i,j] are respectively j and i.
+      
+
+        2b. Rest of arguments
+        ---------------------
+
+      mode: it can be 'imshow' (default), 'contour3D', or 'surface'.
 
       zinterpolation: Supported values are 'none', 'antialiased', 'nearest',
       'bilinear', 'bicubic', 'spline16', 'spline36', 'hanning', 'hamming',
@@ -660,6 +788,8 @@ class GFigure:
       global_color_bar_position: vector with four entries.
 
       color_bar: a colorbar only for the specified axis.
+
+      
 
 
       3. Others
@@ -691,8 +821,8 @@ class GFigure:
           num_subplot_columns is determined from the number of subplots and
           num_subplot_rows.
 
-          The values of the properties of GFigure with the same name
-          can be specified subsequently.
+          The values of the properties of GFigure with the same name can be
+          specified subsequently.
 
 
       """
@@ -797,8 +927,10 @@ class GFigure:
 
         # Actual plotting operation
         for index, subplot in enumerate(self.l_subplots):
-            axis = plt.subplot(self.num_subplot_rows, self.num_subplot_columns,
-                               index + 1)
+            axis = plt.subplot(self.num_subplot_rows,
+                               self.num_subplot_columns,
+                               index + 1,
+                               projection=self.l_subplots[index].projection)
             if self.l_subplots[index] is not None:
 
                 self.l_subplots[index].plot(axis=axis)
@@ -991,6 +1123,66 @@ def plot_example_figure(ind_example):
                     styles=['.'],
                     xlabel='x',
                     ylabel='y=x+w')
+
+    elif ind_example == 9:
+        # 3D plots
+        G = GFigure(num_subplot_rows=3)
+
+        # The three modes 'imshow' (default), 'contour3d', and 'surface' are
+        # tested.
+
+        # 1. Auto axes
+        # Format as an image
+        m_Z = np.reshape(np.arange(20 * 30), (20, 30))
+        G.next_subplot(
+            zaxis=m_Z,
+            xlabel='columns',
+            ylabel='rows',
+        )
+        G.next_subplot(zaxis=m_Z,
+                       xlabel='columns',
+                       ylabel='rows',
+                       zlabel='value',
+                       mode='contour3D')
+
+        # 2. Semi-manual specification of the axes (most typical)
+        xaxis = np.linspace(0, 20, 50)
+        yaxis = np.flip(np.linspace(0, 10, 50))
+        zaxis = yaxis[:, None]**2 + 10 * xaxis[None, :]
+        G.next_subplot(
+            xaxis=xaxis,
+            yaxis=yaxis,
+            zaxis=zaxis,
+            xlabel='x',
+            ylabel='y',
+        )
+        G.next_subplot(xaxis=xaxis,
+                       yaxis=yaxis,
+                       zaxis=zaxis,
+                       xlabel='x',
+                       ylabel='y',
+                       zlabel='z',
+                       mode='surface')
+
+        # 3. Fully manual specification of the axes
+        v_xaxis = np.linspace(0, 6, 50)
+        v_yaxis = np.linspace(0, np.pi, 50)
+        m_X, m_Y = np.meshgrid(v_xaxis, v_yaxis)
+        m_Z = np.sin(m_Y) * m_X
+        G.next_subplot(
+            xaxis=m_X,
+            yaxis=m_Y,
+            zaxis=m_Z,
+            xlabel='x',
+            ylabel='y',
+        )
+        G.next_subplot(xaxis=m_X,
+                       yaxis=m_Y,
+                       zaxis=m_Z,
+                       xlabel='x',
+                       ylabel='y',
+                       zlabel='z',
+                       mode='contour3D')
 
     G.plot()
     plt.show()
