@@ -19,7 +19,7 @@ module_name = "experiments.example_experiments"
 # GFigure
 import gsim.gfigure
 
-gsim.gfigure.title_to_caption = True
+gsim.gfigure.title_to_caption = False
 gsim.gfigure.default_figsize = (5.5, 3.5)  # `None` to let plt choose.
 
 #log.setLevel(logging.DEBUG)
