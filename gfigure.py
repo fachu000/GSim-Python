@@ -1001,6 +1001,10 @@ class GFigure:
             with open(basename_txt, "w") as f:
                 f.write(self.str_caption)
 
+    @staticmethod
+    def show():
+        plt.show()
+
 
 def plot_example_figure(ind_example):
     """
