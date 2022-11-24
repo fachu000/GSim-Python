@@ -26,6 +26,21 @@ arrays. With lists it gets messy when using 3D plots.
 """
 
 
+def hist_bin_edges_to_xy(hist, bin_edges):
+    """ PDF estimate from a histogram with bins of possibly different lengths. """
+
+    def duplicate_entries(v_in):
+        """ If v_in = [v1,v2,...vN], this function returns [v1, v1, v2, v2, ..., vN, vN]."""
+        return np.ravel(np.tile(v_in, (2, 1)).T)
+
+    v_bin_widths = bin_edges[1:] - bin_edges[:-1]
+    v_p = hist / np.sum(hist) / v_bin_widths
+
+    v_x = duplicate_entries(bin_edges)
+    v_y = np.concatenate(([0], duplicate_entries(v_p), [0]))
+    return v_x, v_y
+
+
 def is_number(num):
     #return isinstance(num, (int, float, complex, bool))
     # From https://stackoverflow.com/questions/500328/identifying-numeric-and-array-types-in-numpy
