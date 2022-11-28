@@ -776,7 +776,7 @@ class GFigure:
           corresponding to zaxis[i,j] are xaxis[i,j] and yaxis[i,j].
 
         - xaxis and yaxis are vectors of length N and M, respectively. The (x,y)
-          coordinates corresponding to zaxis[i,j] are xaxis[j] and yaxis[M-1-i].
+          coordinates corresponding to zaxis[i,j] are xaxis[j] and yaxis[i].
           This is useful e.g. when we want the matrix to provide the values of a
           function on the first quadrant, where the bottom-left entry of the
           matrix would correspond to the origin and yaxis is thought of as a
