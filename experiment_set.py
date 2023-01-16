@@ -12,7 +12,7 @@ OUTPUT_DATA_FOLDER = "./output/"
 
 class AbstractExperimentSet:
 
-    def experiment_id_to_f_name(experiment_id):
+    def _experiment_id_to_f_name(experiment_id):
         return f"{EXPERIMENT_FUNCTION_BASE_NAME}{experiment_id}"
 
     @classmethod
@@ -25,13 +25,17 @@ class AbstractExperimentSet:
                 Typical usage: number of iterations.
         """
 
-        f_name = cls.experiment_id_to_f_name(experiment_id)
+        f_name = cls._experiment_id_to_f_name(experiment_id)
 
         if f_name in dir(cls):
             start_time = datetime.now()
-            print("----------------------------------------------------------------------")
+            print(
+                "----------------------------------------------------------------------"
+            )
             print(f"Starting experiment {experiment_id} at {datetime.now()}.")
-            print("----------------------------------------------------------------------")
+            print(
+                "----------------------------------------------------------------------"
+            )
             l_G = getattr(cls, f_name)(l_args)
             end_time = datetime.now()
             print("Elapsed time = ", time_to_str(end_time - start_time))
@@ -55,34 +59,36 @@ class AbstractExperimentSet:
             if len(l_G) == 0:
                 print("The experiment returned no GFigures.")
             else:
-                cls.store_fig(l_G, experiment_id)
-                cls.plot_list_of_GFigure(l_G)
+                cls._store_fig(l_G, experiment_id)
+                cls._plot_list_of_GFigure(l_G)
 
         else:
-            raise ValueError(f"Experiment not found: Class {cls.__name__} in module {cls.__module__} contains no function called {f_name}.")
+            raise ValueError(
+                f"Experiment not found: Class {cls.__name__} in module {cls.__module__} contains no function called {f_name}."
+            )
 
     @classmethod
-    def plot_list_of_GFigure(cls, l_G, save_pdf=False, experiment_id=None):
+    def _plot_list_of_GFigure(cls, l_G, save_pdf=False, experiment_id=None):
 
         if save_pdf:
             assert experiment_id
-            
+
             f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
-            
+
             # Create the folder if it does not exist
             if not os.path.isdir(OUTPUT_DATA_FOLDER):
                 os.mkdir(OUTPUT_DATA_FOLDER)
             target_folder = cls.experiment_set_data_folder()
             if not os.path.isdir(target_folder):
                 os.mkdir(target_folder)
-        
+
         for ind, G in enumerate(l_G):
             G.plot()
             if save_pdf:
-                if len(l_G)>1:
-                    file_name = f_name + "-" + str(ind) 
+                if len(l_G) > 1:
+                    file_name = f_name + "-" + str(ind)
                 else:
-                    file_name = f_name 
+                    file_name = f_name
                 G.export(target_folder + file_name)
         plt.show()
 
@@ -90,7 +96,7 @@ class AbstractExperimentSet:
     def plot_only(cls, experiment_id, save_pdf=False, inspect=False):
 
         f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
-        l_G = cls.load_fig(f_name)
+        l_G = cls._load_fig(f_name)
         if l_G is None:  # There is no data for this experiment.
             print(
                 "The experiment %s does not exist or has not been run before."
@@ -99,11 +105,14 @@ class AbstractExperimentSet:
             if inspect:
                 print("The GFigures are available as `l_G`.")
                 print("Press 'c' to continue, save, and plot. ")
-                print("You can type `interact` to enter interactive mode and `Ctr D` to exit. ")
+                print(
+                    "You can type `interact` to enter interactive mode and `Ctr D` to exit. "
+                )
                 set_trace()
-                cls.store_fig(l_G, experiment_id)
-            cls.plot_list_of_GFigure(l_G, save_pdf=save_pdf, experiment_id=experiment_id)
-        
+                cls._store_fig(l_G, experiment_id)
+            cls._plot_list_of_GFigure(l_G,
+                                      save_pdf=save_pdf,
+                                      experiment_id=experiment_id)
 
     @classmethod
     def experiment_set_data_folder(cls):
@@ -111,7 +120,7 @@ class AbstractExperimentSet:
         return OUTPUT_DATA_FOLDER + cls.__module__.split(".")[-1] + os.sep
 
     @classmethod
-    def store_fig(cls, l_G, experiment_id):
+    def _store_fig(cls, l_G, experiment_id):
 
         # Create the folder if it does not exist
         if not os.path.isdir(OUTPUT_DATA_FOLDER):
@@ -119,13 +128,13 @@ class AbstractExperimentSet:
         target_folder = cls.experiment_set_data_folder()
         if not os.path.isdir(target_folder):
             os.mkdir(target_folder)
-        file_name = cls.experiment_id_to_f_name(experiment_id) + ".pk"
+        file_name = cls._experiment_id_to_f_name(experiment_id) + ".pk"
 
         print("Storing figure as %s" % target_folder + file_name)
         pickle.dump(l_G, open(target_folder + file_name, "wb"))
 
     @classmethod
-    def load_fig(cls, f_name):
+    def _load_fig(cls, f_name):
         """
         Returns a list of GFigure objects if the file exists. Else, it returns None.
 
@@ -137,3 +146,13 @@ class AbstractExperimentSet:
             return None
 
         return pickle.load(open(target_folder + file_name, "rb"))
+
+    @classmethod
+    def load_GFigures(cls, experiment_id):
+        """
+        Returns a list of GFigure objects if the file containing the output of
+        experiment `experiment_id` exists. Else, it returns None.
+        """
+
+        f_name = f"{EXPERIMENT_FUNCTION_BASE_NAME}{experiment_id}"
+        return cls._load_fig(f_name)

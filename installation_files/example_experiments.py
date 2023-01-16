@@ -1,13 +1,13 @@
-import numpy as np 
+import numpy as np
 
 import gsim
 from gsim.gfigure import GFigure
 
 
 class ExperimentSet(gsim.AbstractExperimentSet):
+
     def experiment_1001(l_args):
         print("This is an empty experiment.")
-
 
     def experiment_1002(l_args):
         """The full potential of GSim is exploited by returning GFigures
@@ -35,4 +35,16 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                     title="Parabola",
                     legend="P1")
 
+        return G
+
+    def experiment_1003(l_args):
+        """ 
+        In some occasions, it may be useful to access a GFigure created by a
+        previously-run experiment; e.g. to combine multiple figures. 
+        """
+
+        l_G = ExperimentSet.load_GFigures(1002)
+        G = GFigure()
+        # Same subplot twice
+        G.l_subplots = l_G[0].l_subplots + l_G[0].l_subplots
         return G
