@@ -52,14 +52,11 @@ git config submodule.recurse true
 
 # run_experiment.py
 RUN_EXPERIMENT="run_experiment.py"
-if [ ! -f $RUN_EXPERIMENT ]
-then
-    echo "Copying "$GSIM_DIR$INSTALLATION_FOLDER"/run_experiment.py as "$RUN_EXPERIMENT
-    cp -n $GSIM_DIR$INSTALLATION_FOLDER"/run_experiment.py" $RUN_EXPERIMENT
-    ignore_file $RUN_EXPERIMENT
-else
-    echo "File $RUN_EXPERIMENT already exists."
-fi
+#echo "Copying "$GSIM_DIR$INSTALLATION_FOLDER"/run_experiment.py as "$RUN_EXPERIMENT
+echo "Creating "$RUN_EXPERIMENT
+cp $GSIM_DIR$INSTALLATION_FOLDER"/run_experiment.py" $RUN_EXPERIMENT
+ignore_file $RUN_EXPERIMENT
+
 
 
 # gsim_conf.py
@@ -97,7 +94,7 @@ then
     cp -n $GSIM_CONF_BASE "gsim_conf.py"
     ignore_file "gsim_conf.py"
 else
-    echo "File gsim_conf.py already exists."
+    echo "File gsim_conf.py already exists. If you encounter execution problems, try erasing it and running this script again."
 fi
 
 EXAMPLE_EXPERIMENTS="experiments/example_experiments.py"
@@ -115,3 +112,6 @@ echo -e "Done.\n"
 echo "You can now run your experiment as"
 echo "$ python run_experiment.py <experiment_number>"
 echo ""
+echo "Type "
+echo "$ python run_experiment.py -h"
+echo "for further options."

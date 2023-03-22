@@ -16,7 +16,11 @@ class AbstractExperimentSet:
         return f"{EXPERIMENT_FUNCTION_BASE_NAME}{experiment_id}"
 
     @classmethod
-    def run_experiment(cls, experiment_id, l_args=[]):
+    def run_experiment(cls,
+                       experiment_id,
+                       l_args=[],
+                       save_pdf=False,
+                       inspect=False):
         """ Executes the experiment function with identifier <ind_experiment>
 
         Args:
@@ -60,7 +64,10 @@ class AbstractExperimentSet:
                 print("The experiment returned no GFigures.")
             else:
                 cls._store_fig(l_G, experiment_id)
-                cls._plot_list_of_GFigure(l_G)
+                cls._plot_list_of_GFigure(l_G,
+                                          save_pdf=save_pdf,
+                                          experiment_id=experiment_id,
+                                          inspect=inspect)
 
         else:
             raise ValueError(
@@ -68,7 +75,20 @@ class AbstractExperimentSet:
             )
 
     @classmethod
-    def _plot_list_of_GFigure(cls, l_G, save_pdf=False, experiment_id=None):
+    def _plot_list_of_GFigure(cls,
+                              l_G,
+                              save_pdf=False,
+                              experiment_id=None,
+                              inspect=False):
+
+        if inspect:
+            print("The GFigures are available as `l_G`.")
+            print("Press 'c' to continue, save, and plot. ")
+            print(
+                "You can type `interact` to enter interactive mode and `Ctr D` to exit. "
+            )
+            set_trace()
+            cls._store_fig(l_G, experiment_id)
 
         if save_pdf:
             assert experiment_id
@@ -102,17 +122,10 @@ class AbstractExperimentSet:
                 "The experiment %s does not exist or has not been run before."
                 % experiment_id)
         else:
-            if inspect:
-                print("The GFigures are available as `l_G`.")
-                print("Press 'c' to continue, save, and plot. ")
-                print(
-                    "You can type `interact` to enter interactive mode and `Ctr D` to exit. "
-                )
-                set_trace()
-                cls._store_fig(l_G, experiment_id)
             cls._plot_list_of_GFigure(l_G,
                                       save_pdf=save_pdf,
-                                      experiment_id=experiment_id)
+                                      experiment_id=experiment_id,
+                                      inspect=inspect)
 
     @classmethod
     def experiment_set_data_folder(cls):
