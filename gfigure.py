@@ -26,6 +26,12 @@ arrays. With lists it gets messy when using 3D plots.
 """
 
 
+def inspect_hist(data, hist_args={}):
+    G = GFigure()
+    G.add_histogram_curve(data, hist_args=hist_args)
+    G.plot()
+
+
 def hist_bin_edges_to_xy(hist, bin_edges):
     """ PDF estimate from a histogram with bins of possibly different lengths. """
 
