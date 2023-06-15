@@ -882,6 +882,28 @@ class GFigure:
         self.select_subplot(self.ind_active_subplot, **kwargs)
         self.l_subplots[self.ind_active_subplot].add_curve(*args, **kwargs)
 
+    def add_histogram_curve(self,
+                            data,
+                            *args,
+                            hist_args={},
+                            ind_active_subplot=None,
+                            **kwargs):
+        """ This works like add_curve, but it adds a curve with the histogram of
+        `data`. See example below.
+        
+        Args:
+            - `hist_args`: dictionary with the arguments passed to np.histogram. 
+        
+        """
+        v_hist, v_bin_edges = np.histogram(data, **hist_args)
+
+        v_x, v_y = hist_bin_edges_to_xy(v_hist, v_bin_edges)
+        self.add_curve(v_x,
+                       v_y,
+                       *args,
+                       ind_active_subplot=ind_active_subplot,
+                       **kwargs)
+
     def next_subplot(self, **kwargs):
         # Creates a new subplot at the end of the list of axes. One can
         # specify subplot parameters; see GFigure.
@@ -1205,6 +1227,27 @@ def plot_example_figure(ind_example):
                        ylabel='y',
                        zlabel='z',
                        mode='contour3D')
+
+    elif ind_example == 10:
+        # Histogram
+        v_data_norm = np.random.normal(size=(1000, ), loc=0, scale=1)
+        v_data_exp = np.random.exponential(size=(1000, ), scale=1)
+
+        G = GFigure(xlabel='Value', ylabel='Density')
+        G.add_histogram_curve(data=v_data_norm,
+                              styles='b',
+                              hist_args={
+                                  'bins': 50,
+                                  'density': True
+                              },
+                              legend='Normal')
+        G.add_histogram_curve(data=v_data_exp,
+                              styles='r',
+                              hist_args={
+                                  'bins': 50,
+                                  'density': True
+                              },
+                              legend='Exponential')
 
     G.plot()
     plt.show()
