@@ -50,6 +50,9 @@ echo "Installing GSim-Python..."
 # The following sets git to sync the submodules when doing `git pull`
 git config submodule.recurse true
 
+# Automatically remove Windows carriage returns
+git config core.autocrlf true
+
 # run_experiment.py
 RUN_EXPERIMENT="run_experiment.py"
 if [ ! -f $RUN_EXPERIMENT ]
@@ -100,14 +103,15 @@ else
     echo "File gsim_conf.py already exists."
 fi
 
-EXAMPLE_EXPERIMENTS="experiments/example_experiments.py"
-if [ ! -f $EXAMPLE_EXPERIMENTS ]
+EXAMPLE_EXPERIMENTS_FOLDER="experiments"
+EXAMPLE_EXPERIMENTS=$EXAMPLE_EXPERIMENTS_FOLDER"/example_experiments.py"
+mkdir -p experiments
+if [ -z "$( ls $EXAMPLE_EXPERIMENTS_FOLDER )" ] 
 then
-    mkdir -p experiments
-    echo "Copying "$GSIM_DIR$INSTALLATION_FOLDER"/example_experiments.py to"$EXAMPLE_EXPERIMENTS
+    echo "Copying "$GSIM_DIR$INSTALLATION_FOLDER"/example_experiments.py to "$EXAMPLE_EXPERIMENTS
     cp -n $GSIM_DIR$INSTALLATION_FOLDER"/example_experiments.py" $EXAMPLE_EXPERIMENTS
 else
-    echo "File $EXAMPLE_EXPERIMENTS already exists."
+    echo "Folder $EXAMPLE_EXPERIMENTS_FOLDER already contains files."
 fi
 
 echo -e "Done.\n"
