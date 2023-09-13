@@ -330,6 +330,7 @@ class Subplot:
                  xlim=None,
                  ylim=None,
                  zlim=None,
+                 yticks=None,
                  legend_loc=None,
                  create_curves=True,
                  **kwargs):
@@ -347,6 +348,7 @@ class Subplot:
         self.xlim = xlim
         self.ylim = ylim
         self.zlim = zlim
+        self.yticks = yticks
         self.legend_loc = legend_loc
 
         self.l_curves = []
@@ -619,6 +621,9 @@ class Subplot:
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
 
+        # Y ticks
+        plt.yticks(self.yticks)
+
         if self.projection == '3d' and hasattr(self, 'zlabel') and self.zlabel:
             plt.gca().set_zlabel(self.zlabel)
 
@@ -725,6 +730,8 @@ class GFigure:
       ylim : tuple, endpoints for the y axis.
 
       zlim : tuple, endpoints for the z axis. Used e.g. for the color scale. 
+
+      yticks: None or 1D array like. If None, the default ticks are used. If 1D array like, it specifies the ticks. yticks can be set to an empty list for no ticks.
 
       legend_loc: str, it indicates the location of the legend. Example values:
           "lower left", "upper right", etc.
