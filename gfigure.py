@@ -617,6 +617,8 @@ class Subplot:
         if not Curve.legend_is_empty(self.l_curves):
             if not hasattr(self, "legend_loc"):
                 self.legend_loc = None  # backwards compatibility
+            if not hasattr(self, "num_legend_cols"):
+                self.num_legend_cols = 1
             plt.legend(loc=self.legend_loc, ncol=self.num_legend_cols)
 
         # Axis labels
