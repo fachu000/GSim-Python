@@ -1,8 +1,9 @@
-import sys
-import matplotlib.pyplot as plt
-from IPython.core.debugger import set_trace
 import copy
+import sys
+
+import matplotlib.pyplot as plt
 import numpy as np
+from IPython.core.debugger import set_trace
 
 title_to_caption = False
 default_figsize = None  # `None` lets plt choose
@@ -333,6 +334,7 @@ class Subplot:
                  yticks=None,
                  legend_loc=None,
                  create_curves=True,
+                 num_legend_cols=1,
                  **kwargs):
         """
       For a description of the arguments, see GFigure.__init__
@@ -350,7 +352,7 @@ class Subplot:
         self.zlim = zlim
         self.yticks = yticks
         self.legend_loc = legend_loc
-
+        self.num_legend_cols = num_legend_cols
         self.l_curves = []
         if create_curves:
             self.add_curve(**kwargs)
@@ -615,14 +617,17 @@ class Subplot:
         if not Curve.legend_is_empty(self.l_curves):
             if not hasattr(self, "legend_loc"):
                 self.legend_loc = None  # backwards compatibility
-            plt.legend(loc=self.legend_loc)
+            if not hasattr(self, "num_legend_cols"):
+                self.num_legend_cols = 1
+            plt.legend(loc=self.legend_loc, ncol=self.num_legend_cols)
 
         # Axis labels
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
 
         # Y ticks
-        plt.yticks(self.yticks)
+        if hasattr(self, "yticks"):
+            plt.yticks(self.yticks)
 
         if self.projection == '3d' and hasattr(self, 'zlabel') and self.zlabel:
             plt.gca().set_zlabel(self.zlabel)
@@ -735,6 +740,8 @@ class GFigure:
 
       legend_loc: str, it indicates the location of the legend. Example values:
           "lower left", "upper right", etc.
+        
+      num_legend_cols: int, number of columns in the legend.
 
       CURVE ARGUMENTS:
       =================
