@@ -35,7 +35,6 @@ def inspect_hist(data, hist_args={}):
 
 def hist_bin_edges_to_xy(hist, bin_edges):
     """ PDF estimate from a histogram with bins of possibly different lengths. """
-
     def duplicate_entries(v_in):
         """ If v_in = [v1,v2,...vN], this function returns [v1, v1, v2, v2, ..., vN, vN]."""
         return np.ravel(np.tile(v_in, (2, 1)).T)
@@ -64,7 +63,6 @@ def is_number(num):
 
 
 class Curve:
-
     def __init__(self,
                  xaxis=None,
                  yaxis=[],
@@ -107,7 +105,7 @@ class Curve:
       Other arguments
       ---------------
 
-      style : str used as argument to plt.plot()
+      style : str used as argument to plt.plot() and can be None. The current format is "*#??????", where "*" defines the marker and the line style, "#??????" defines the color in hexadecimal code.
 
       """
 
@@ -203,7 +201,6 @@ class Curve:
             self._plot_2D()
 
     def _plot_2D(self):
-
         def plot_band(lower, upper):
             if self.xaxis:
                 plt.fill_between(self.xaxis, lower, upper, alpha=0.2)
@@ -234,17 +231,22 @@ class Curve:
         else:
             axis_args = (self.yaxis, )
 
+        style = self.style if self.style else "-"
+
+        color = '#' + style.split("#")[1] if len(
+            style.split("#")) > 1 else None
+        style = style.split("#")[0]
+
         if hasattr(self, 'mode') and (self.mode is not None) and (self.mode
                                                                   == 'stem'):
 
             def plot_fun(*args, **kwargs):
                 return plt.stem(*args, **kwargs, use_line_collection=True)
+
+            plot_fun(*axis_args, style, label=self.legend_str)
         else:
-            plot_fun = plt.plot
 
-        style = self.style if self.style else "-"
-
-        plot_fun(*axis_args, style, label=self.legend_str)
+            plt.plot(*axis_args, style, color=color, label=self.legend_str)
 
     def _plot_3D(self, axis=None, interpolation="none", zlim=None):
 
@@ -320,7 +322,6 @@ class Curve:
 
 
 class Subplot:
-
     def __init__(self,
                  title="",
                  xlabel="",
@@ -331,6 +332,7 @@ class Subplot:
                  xlim=None,
                  ylim=None,
                  zlim=None,
+                 xticks=None,
                  yticks=None,
                  legend_loc=None,
                  create_curves=True,
@@ -350,6 +352,7 @@ class Subplot:
         self.xlim = xlim
         self.ylim = ylim
         self.zlim = zlim
+        self.xticks = xticks
         self.yticks = yticks
         self.legend_loc = legend_loc
         self.num_legend_cols = num_legend_cols
@@ -509,9 +512,7 @@ class Subplot:
       Both returned lists can be empty if no curve is specified.
 
       """
-
         def unify_format(axis):
-
             def ndarray_to_list(arr):
                 """Returns a list of lists."""
                 assert (type(arr) == np.ndarray)
@@ -624,6 +625,10 @@ class Subplot:
         # Axis labels
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
+
+        # X ticks
+        if hasattr(self, "xticks"):
+            plt.xticks(self.xticks)
 
         # Y ticks
         if hasattr(self, "yticks"):
