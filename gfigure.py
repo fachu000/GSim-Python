@@ -89,7 +89,8 @@ class Curve:
 
       zaxis : None
 
-      ylower, yupper: [] or lists of a numeric type with the same length as yaxis.
+      ylower, yupper: [] or lists of a numeric type with the same length as
+      yaxis.
 
       mode : can be 'plot' or 'stem'
 
@@ -107,8 +108,7 @@ class Curve:
       Other arguments
       ---------------
 
-      style : str used as argument to plt.plot()
-
+      style : see the docstring of GFigure
       """
 
         # Input check
@@ -234,17 +234,24 @@ class Curve:
         else:
             axis_args = (self.yaxis, )
 
+        style = self.style if self.style else "-"
+
         if hasattr(self, 'mode') and (self.mode is not None) and (self.mode
                                                                   == 'stem'):
 
             def plot_fun(*args, **kwargs):
                 return plt.stem(*args, **kwargs, use_line_collection=True)
+
+            # stem does not take 'color' as an argument, but the color may be
+            # specified through `style`
+            plot_fun(*axis_args, style, label=self.legend_str)
         else:
-            plot_fun = plt.plot
+            # Get the hex color from self.style if present
+            hex_color = '#' + style.split("#")[1] if "#" in style else None
+            style = style.split("#")[0]
+            kwargs = {'color': hex_color} if hex_color else dict()
 
-        style = self.style if self.style else "-"
-
-        plot_fun(*axis_args, style, label=self.legend_str)
+            plt.plot(*axis_args, style, label=self.legend_str, **kwargs)
 
     def _plot_3D(self, axis=None, interpolation="none", zlim=None):
 
@@ -331,6 +338,7 @@ class Subplot:
                  xlim=None,
                  ylim=None,
                  zlim=None,
+                 xticks=None,
                  yticks=None,
                  legend_loc=None,
                  create_curves=True,
@@ -350,6 +358,7 @@ class Subplot:
         self.xlim = xlim
         self.ylim = ylim
         self.zlim = zlim
+        self.xticks = xticks
         self.yticks = yticks
         self.legend_loc = legend_loc
         self.num_legend_cols = num_legend_cols
@@ -625,6 +634,10 @@ class Subplot:
         plt.xlabel(self.xlabel)
         plt.ylabel(self.ylabel)
 
+        # X ticks
+        if hasattr(self, "xticks"):
+            plt.xticks(self.xticks)
+
         # Y ticks
         if hasattr(self, "yticks"):
             plt.yticks(self.yticks)
@@ -736,7 +749,9 @@ class GFigure:
 
       zlim : tuple, endpoints for the z axis. Used e.g. for the color scale. 
 
-      yticks: None or 1D array like. If None, the default ticks are used. If 1D array like, it specifies the ticks. yticks can be set to an empty list for no ticks.
+      yticks: None or 1D array like. If None, the default ticks are used. If 1D
+      array like, it specifies the ticks. yticks can be set to an empty list for
+      no ticks.
 
       legend_loc: str, it indicates the location of the legend. Example values:
           "lower left", "upper right", etc.
@@ -832,8 +847,19 @@ class GFigure:
          ---------
 
       styles: specifies the style argument to plot, as in MATLAB. Possibilities:
+          
           - str : this style is applied to all curves specified by `xaxis` and
-          `yaxis` will - list of str : then style[n] is applied to the n-th
+          `yaxis`. It is a concatenation of the following items: 
+      
+                * marker style (e.g. '.','o','x')
+      
+                * line style (e.g. '-','--','-.')
+      
+                * color. The color can be a letter as in MATLAB (e.g. 'k', 'b',
+                  'r') or an hexadecimal number of the form  "#??????", where ?
+                  denotes a hexadecimal digit (e.g. '#2244FF'). 
+
+          - list of str : then styles[n] is applied to the n-th
           curve. Its length must be at least the number of curves.
 
       legend : str, tuple of str, or list of str. If the str begins with "_",
@@ -1086,14 +1112,16 @@ def plot_example_figure(ind_example):
 
     elif ind_example == 2:
         # Example with three curves on one subplot
+        # The style can be specified as in MATLAB
         G = GFigure(xaxis=v_x,
                     yaxis=v_y1,
                     xlabel="x",
                     ylabel="f(x)",
                     title="Parabolas",
+                    styles=".-#FF0000",
                     legend="P1")
-        G.add_curve(xaxis=v_x, yaxis=v_y2, legend="P2")
-        G.add_curve(xaxis=v_x, yaxis=v_y3, legend="P3")
+        G.add_curve(xaxis=v_x, yaxis=v_y2, legend="P2", styles="o--k")
+        G.add_curve(xaxis=v_x, yaxis=v_y3, legend="P3", styles="x:b")
 
     elif ind_example == 3:
         # Typical scheme where a simulation function produces each
@@ -1111,6 +1139,11 @@ def plot_example_figure(ind_example):
 
     elif ind_example == 4:
         # Example with two subplots
+
+        # As a shortcut, the first curve can be directly specified by passing
+        # the necessary args to the constructor. Alternatively, one can
+        # instantiate GFigure and then add the curves one by one with
+        # `add_curve`.
         G = GFigure(xaxis=v_x,
                     yaxis=v_y1,
                     xlabel="x",
@@ -1119,11 +1152,16 @@ def plot_example_figure(ind_example):
                     legend="P1")
         G.add_curve(xaxis=v_x, yaxis=v_y2, legend="P2")
         G.next_subplot(xlabel="x")
-        G.add_curve(
-            xaxis=v_x,
-            yaxis=v_y3,
-            legend="P3",
-        )
+        G.add_curve(xaxis=v_x,
+                    yaxis=v_y2,
+                    legend="P3",
+                    mode="stem",
+                    styles="ob")
+        G.add_curve(xaxis=v_x,
+                    yaxis=v_y3,
+                    legend="P3",
+                    mode="stem",
+                    styles="xk")
 
     elif ind_example == 5:
         # Example with a large multiplot
