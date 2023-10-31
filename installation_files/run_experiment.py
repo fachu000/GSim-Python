@@ -63,6 +63,14 @@ if __name__ == '__main__':
         help=
         'load the stored figures and open a pdb prompt to inspect the GFigure objects.',
         action="store_true")
+    
+    parser.add_argument(
+        '-g',
+        '--gpu',
+        help=
+        'Select the GPU.',
+        action="store_true"
+       )
 
     args, unknown_args = parser.parse_known_args()
     ExperimentSet = load_modules()
@@ -83,6 +91,11 @@ if __name__ == '__main__':
                                 save_pdf=args.export,
                                 inspect=args.inspect)
     else:
+        if args.gpu:
+            os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+            os.environ["CUDA_VISIBLE_DEVICES"] = args.experiment_args[0]
+            args.experiment_args = args.experiment_args[1:]
+            
         ExperimentSet.run_experiment(args.experiment_index,
                                      args.experiment_args,
                                      save_pdf=args.export,
