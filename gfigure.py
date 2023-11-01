@@ -74,7 +74,8 @@ class Curve:
                  yupper=[],
                  style=None,
                  mode=None,
-                 legend_str=""):
+                 legend_str="",
+                 aspect=None):
         """
 
       See GFigure.__init__ for more information.
@@ -93,6 +94,9 @@ class Curve:
       yaxis.
 
       mode : can be 'plot' or 'stem'
+
+      aspect: can be 'square' or take the values in plt.imshow. It applies only
+      to imshow. 
 
       2. For 3D plots:
       ----------------
@@ -191,6 +195,7 @@ class Curve:
         self.zaxis = zaxis
         self.zinterpolation = zinterpolation
         self.image = None
+        self.aspect = aspect
 
     def __repr__(self):
         return f"<Curve: legend_str = {self.legend_str}, num_points = {len(self.yaxis)}>"
@@ -278,6 +283,8 @@ class Curve:
                 m_Z = self.zaxis
 
         if self.mode == 'imshow':
+            aspect = (m_X[-1, -1] - m_X[-1, 0]) / (m_Y[-1, 0] - m_Y[0, 0]) if (
+                hasattr(self, "aspect") and self.aspect == "square") else None
             self.image = axis.imshow(
                 m_Z,
                 interpolation=self.zinterpolation,
@@ -285,6 +292,7 @@ class Curve:
                 # origin='lower',
                 extent=[m_X[-1, 0], m_X[-1, -1], m_Y[-1, 0], m_Y[0, 0]],
                 vmax=zlim[1] if zlim else None,
+                aspect=aspect,
                 vmin=zlim[0] if zlim else None)
         elif self.mode == 'contour3D':
             axis.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
@@ -393,7 +401,8 @@ class Subplot:
                   yupper=[],
                   styles=[],
                   mode=None,
-                  legend=tuple()):
+                  legend=tuple(),
+                  aspect=None):
         """
       Adds one or multiple curves to `self`. See documentation of GFigure.__init__
       """
@@ -414,7 +423,8 @@ class Subplot:
                       yaxis=yaxis,
                       zaxis=zaxis,
                       zinterpolation=zinterpolation,
-                      mode=mode))
+                      mode=mode,
+                      aspect=aspect))
 
     def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
                                      legend, mode):
@@ -845,6 +855,9 @@ class GFigure:
 
       global_color_bar_position: vector with four entries.
 
+      aspect: can be 'square' or take the values in plt.imshow. It applies only
+      to imshow. 
+
       3. Others
          ---------
 
@@ -1238,11 +1251,10 @@ def plot_example_figure(ind_example):
         # 1. Auto axes
         # Format as an image
         m_Z = np.reshape(np.arange(20 * 30), (20, 30))
-        G.next_subplot(
-            zaxis=m_Z,
-            xlabel='columns',
-            ylabel='rows',
-        )
+        G.next_subplot(zaxis=m_Z,
+                       xlabel='columns',
+                       ylabel='rows',
+                       aspect='square')
         G.next_subplot(zaxis=m_Z,
                        xlabel='columns',
                        ylabel='rows',
