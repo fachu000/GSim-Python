@@ -53,6 +53,14 @@ git config submodule.recurse true
 # Automatically remove Windows carriage returns
 git config core.autocrlf true
 
+# Useful git aliases
+git config alias.lo "log --graph --decorate --pretty=oneline --abbrev-commit --all"
+git config alias.lol "log --graph --decorate --pretty=oneline --abbrev-commit"
+git config alias.lola "log --graph --decorate --pretty=oneline --abbrev-commit --all --name-status"
+git config alias.lolas "log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset%n' --abbrev-commit --date=relative --branches  --all --name-status"
+
+
+
 # run_experiment.py
 RUN_EXPERIMENT="run_experiment.py"
 #echo "Copying "$GSIM_DIR$INSTALLATION_FOLDER"/run_experiment.py as "$RUN_EXPERIMENT
