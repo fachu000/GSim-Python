@@ -35,7 +35,6 @@ def inspect_hist(data, hist_args={}):
 
 def hist_bin_edges_to_xy(hist, bin_edges):
     """ PDF estimate from a histogram with bins of possibly different lengths. """
-
     def duplicate_entries(v_in):
         """ If v_in = [v1,v2,...vN], this function returns [v1, v1, v2, v2, ..., vN, vN]."""
         return np.ravel(np.tile(v_in, (2, 1)).T)
@@ -64,7 +63,6 @@ def is_number(num):
 
 
 class Curve:
-
     def __init__(self,
                  xaxis=None,
                  yaxis=[],
@@ -208,7 +206,6 @@ class Curve:
             self._plot_2D()
 
     def _plot_2D(self):
-
         def plot_band(lower, upper):
             if self.xaxis:
                 plt.fill_between(self.xaxis, lower, upper, alpha=0.2)
@@ -335,7 +332,6 @@ class Curve:
 
 
 class Subplot:
-
     def __init__(self,
                  title="",
                  xlabel="",
@@ -347,6 +343,7 @@ class Subplot:
                  ylim=None,
                  zlim=None,
                  xticks=None,
+                 num_xticks_decimal_places=None,
                  yticks=None,
                  legend_loc=None,
                  create_curves=True,
@@ -367,6 +364,7 @@ class Subplot:
         self.ylim = ylim
         self.zlim = zlim
         self.xticks = xticks
+        self.num_xticks_decimal_places = num_xticks_decimal_places
         self.yticks = yticks
         self.legend_loc = legend_loc
         self.num_legend_cols = num_legend_cols
@@ -449,8 +447,9 @@ class Subplot:
         else:
             #   if len(l_style) < len(l_xaxis):
             #       raise ValueError("The length of the styles argument needs to be at least the number of curves.")
-            assert len(l_style) >= len(l_xaxis), "The length of `style` must be"\
-                  " either 1 or no less than the number of curves"
+            assert len(l_style) >= len(
+                l_xaxis
+            ), "The length of `style` must be" " either 1 or no less than the number of curves"
             l_style = l_style[0:len(l_xaxis)]
 
         # Process the legend
@@ -508,8 +507,7 @@ class Subplot:
         """
       Returns a list of str. 
       """
-        err_msg = "Style argument must be an str "\
-            "or list of str"
+        err_msg = "Style argument must be an str " "or list of str"
         if type(style_arg) == str:
             return [style_arg]
         elif type(style_arg) == list:
@@ -528,9 +526,7 @@ class Subplot:
       Both returned lists can be empty if no curve is specified.
 
       """
-
         def unify_format(axis):
-
             def ndarray_to_list(arr):
                 """Returns a list of lists."""
                 assert (type(arr) == np.ndarray)
@@ -610,8 +606,7 @@ class Subplot:
         # Expand (broadcast) l_xaxis to have the same length as l_yaxis
         if len(l_xaxis) > 0 and len(l_yaxis) == 0:
             raise Exception("The x-axis was provided but the y-axis was not.")
-        str_message = "Number of lists in the xaxis must be"\
-            "0, 1 or equal to the number of curves in the y axis"
+        str_message = "Number of lists in the xaxis must be" "0, 1 or equal to the number of curves in the y axis"
         if len(l_xaxis) > 1 and len(l_yaxis) != len(l_xaxis):
             raise Exception(str_message)
         if len(l_xaxis) == 0 and len(l_yaxis) > 0:
@@ -649,6 +644,13 @@ class Subplot:
         # X ticks
         if hasattr(self, "xticks"):
             plt.xticks(self.xticks)
+
+        if hasattr(self, "num_xticks_decimal_places"
+                   ) and self.num_xticks_decimal_places is not None:
+            import matplotlib.ticker as ticker
+            plt.gca().xaxis.set_major_formatter(
+                ticker.FormatStrFormatter(
+                    f'%.{self.num_xticks_decimal_places}f'))
 
         # Y ticks
         if hasattr(self, "yticks"):
@@ -1320,6 +1322,24 @@ def plot_example_figure(ind_example):
                                   'density': True
                               },
                               legend='Exponential')
+
+    elif ind_example == 11:
+        # Example of xticks with a fixed number of decimal places
+        v_x = np.linspace(0, 10, 10)
+        v_y = v_x**2
+        G = GFigure(xaxis=v_x,
+                    yaxis=v_y,
+                    xlabel="x",
+                    ylabel="f(x)",
+                    title="Parabola",
+                    num_xticks_decimal_places=3)
+        G.next_subplot(xaxis=v_x,
+                       yaxis=v_y,
+                       xlabel="x",
+                       ylabel="f(x)",
+                       title="Parabola",
+                       num_xticks_decimal_places=2,
+                       xticks=v_x + 0.5)
 
     G.plot()
     plt.show()
