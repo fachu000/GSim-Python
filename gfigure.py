@@ -35,6 +35,7 @@ def inspect_hist(data, hist_args={}):
 
 def hist_bin_edges_to_xy(hist, bin_edges):
     """ PDF estimate from a histogram with bins of possibly different lengths. """
+
     def duplicate_entries(v_in):
         """ If v_in = [v1,v2,...vN], this function returns [v1, v1, v2, v2, ..., vN, vN]."""
         return np.ravel(np.tile(v_in, (2, 1)).T)
@@ -63,6 +64,7 @@ def is_number(num):
 
 
 class Curve:
+
     def __init__(self,
                  xaxis=None,
                  yaxis=[],
@@ -206,6 +208,7 @@ class Curve:
             self._plot_2D()
 
     def _plot_2D(self):
+
         def plot_band(lower, upper):
             if self.xaxis:
                 plt.fill_between(self.xaxis, lower, upper, alpha=0.2)
@@ -292,15 +295,15 @@ class Curve:
                 aspect=aspect,
                 vmin=zlim[0] if zlim else None)
         elif self.mode == 'contour3D':
-            axis.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
+            self.image = axis.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
         elif self.mode == 'surface':
-            axis.plot_surface(m_X,
-                              m_Y,
-                              m_Z,
-                              rstride=1,
-                              cstride=1,
-                              cmap='viridis',
-                              edgecolor='none')
+            self.image = axis.plot_surface(m_X,
+                                           m_Y,
+                                           m_Z,
+                                           rstride=1,
+                                           cstride=1,
+                                           cmap='viridis',
+                                           edgecolor='none')
 
         else:
             raise ValueError(f'Unrecognized 3D plotting mode. Got {self.mode}')
@@ -332,6 +335,7 @@ class Curve:
 
 
 class Subplot:
+
     def __init__(self,
                  title="",
                  xlabel="",
@@ -526,7 +530,9 @@ class Subplot:
       Both returned lists can be empty if no curve is specified.
 
       """
+
         def unify_format(axis):
+
             def ndarray_to_list(arr):
                 """Returns a list of lists."""
                 assert (type(arr) == np.ndarray)
