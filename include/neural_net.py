@@ -1,4 +1,5 @@
 import os
+import pickle
 import tempfile
 import numpy as np
 import torch
@@ -137,6 +138,11 @@ class NeuralNet(nn.Module):
     def weight_file_path(self):
         assert self.nn_folder is not None
         return os.path.join(self.nn_folder, "weights.pth")
+
+    @property
+    def hist_path(self):
+        assert self.nn_folder is not None
+        return os.path.join(self.nn_folder, "hist.pk")
 
     def load_weights_from_path(self, path):
         checkpoint = torch.load(path, weights_only=True)
@@ -301,6 +307,25 @@ class NeuralNet(nn.Module):
                 optimizer.param_groups[ind_group][
                     "lr"] = l_lr[ind_group] * lr_decay
 
+        def save_hist(d_hist):
+            if self.nn_folder is not None:
+                os.makedirs(self.nn_folder, exist_ok=True)
+                pickle.dump(d_hist, open(self.hist_path, "wb"))
+
+        def load_hist():
+            if self.nn_folder is not None and os.path.exists(self.hist_path):
+                d_hist = pickle.load(open(self.hist_path, "rb"))
+            else:
+                d_hist = {
+                    'train_loss_me': [],
+                    'train_loss': [],
+                    'val_loss': [],
+                    "lr": [],
+                    "l_loss_landscapes": [],
+                    "ind_epoch": 0
+                }
+            return d_hist
+
         self._assert_initialized()
 
         batch_size_eval = batch_size_eval if batch_size_eval else batch_size
@@ -320,11 +345,14 @@ class NeuralNet(nn.Module):
                                     batch_size=batch_size,
                                     shuffle=shuffle)
 
-        l_loss_train_me = []
-        l_loss_train = []
-        l_loss_val = []
-        l_lr = []
-        l_llplots = []  # loss landscape plots
+        d_hist = load_hist()
+        l_loss_train_me = d_hist['train_loss_me']
+        l_loss_train = d_hist['train_loss']
+        l_loss_val = d_hist['val_loss']
+        l_lr = d_hist['lr']
+        l_llplots = d_hist['l_loss_landscapes']  # loss landscape plots
+        ind_epoch_start = d_hist['ind_epoch']
+
         llp_weight_file = get_temp_file_path(
         )  # file to restore the weights when the loss landscape needs to be plotted
 
@@ -336,7 +364,7 @@ class NeuralNet(nn.Module):
         initial_optimizer_state_file = get_temp_file_path()
         save_optimizer_state(initial_optimizer_state_file)
 
-        for ind_epoch in range(num_epochs):
+        for ind_epoch in range(ind_epoch_start, ind_epoch_start + num_epochs):
             self.train()
             loss_train_me_this_epoch = self._run_epoch(dataloader_train,
                                                        f_loss, optimizer)
@@ -346,7 +374,7 @@ class NeuralNet(nn.Module):
             loss_val_this_epoch = self._run_epoch(dataloader_val, f_loss)
 
             print(
-                f"Epoch {ind_epoch}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.2f}, train loss = {loss_train_this_epoch:.2f}, val loss = {loss_val_this_epoch:.2f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
+                f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.2f}, train loss = {loss_train_this_epoch:.2f}, val loss = {loss_val_this_epoch:.2f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
             )
 
             l_loss_train_me.append(loss_train_me_this_epoch)
@@ -376,10 +404,20 @@ class NeuralNet(nn.Module):
                         num_epochs_left_to_expire_lr_patience = lr_patience
 
             # Loss landscapes
-            if ind_epoch in llc.epoch_inds:
+            if ind_epoch - ind_epoch_start in llc.epoch_inds:
                 l_llplots.append(
                     get_landscape_plot(dataloader_train,
                                        dataloader_train_eval))
+
+            d_hist = {
+                'train_loss_me': l_loss_train_me,
+                'train_loss': l_loss_train,
+                'val_loss': l_loss_val,
+                "lr": l_lr,
+                "l_loss_landscapes": l_llplots,
+                "ind_epoch": ind_epoch
+            }
+            save_hist(d_hist)
 
         if best_weights and num_epochs > 0:
             if val_split != 0:
@@ -387,20 +425,14 @@ class NeuralNet(nn.Module):
             else:
                 self.load_weights_from_path(best_train_loss_file)
 
-        return {
-            'train_loss_me': l_loss_train_me,
-            'train_loss': l_loss_train,
-            'val_loss': l_loss_val,
-            "lr": l_lr,
-            "l_loss_landscapes": l_llplots
-        }
+        return d_hist
 
     @staticmethod
     def plot_training_history(d_metrics_train):
         G = GFigure()
         G.next_subplot(xlabel="Epoch", ylabel="Loss")
         for key in d_metrics_train.keys():
-            if key not in ["lr", "l_loss_landscapes"]:
+            if key not in ["lr", "l_loss_landscapes", "ind_epoch"]:
                 G.add_curve(yaxis=d_metrics_train[key], legend=key)
         G.next_subplot(xlabel="Epoch", ylabel="Learning rate")
         G.add_curve(yaxis=d_metrics_train["lr"], legend="Learning rate")
