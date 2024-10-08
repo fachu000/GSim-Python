@@ -1,3 +1,4 @@
+import os
 import tempfile
 import numpy as np
 import torch
@@ -36,12 +37,37 @@ class LossLandscapeConfig():
 
 class NeuralNet(nn.Module):
 
-    def __init__(self, *args, **kwargs):
+    _initialized = False
+
+    def __init__(self, *args, nn_folder=None, **kwargs):
+        """
+        
+        Args: 
+
+            `nn_folder`: if not None, the weights of the network are loaded from
+            this folder. When training, if validation data is provided, the
+            weights that minimize the validation loss are saved in this folder
+            together with training metrics. If validation data is not provided,
+            the weights that minimize the training loss are saved.
+        
+        
+        """
 
         super().__init__(*args, **kwargs)
         self.device_type = ("cuda" if torch.cuda.is_available() else "mps"
                             if torch.backends.mps.is_available() else "cpu")
         print(f"Using {self.device_type} device")
+        self.nn_folder = nn_folder
+
+    def initialize(self):
+        self._initialized = True
+
+        if self.nn_folder is not None and os.path.exists(
+                self.weight_file_path):
+            self.load_weights_from_path(self.weight_file_path)
+
+    def _assert_initialized(self):
+        assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
 
     def _run_epoch(self, dataloader, f_loss, optimizer=None):
         """
@@ -84,6 +110,7 @@ class NeuralNet(nn.Module):
 
         "loss": the result of averaging `f_loss` across `dataset`.
         """
+        self._assert_initialized()
 
         dataloader = DataLoader(dataset, batch_size=batch_size)
         self.eval()
@@ -95,6 +122,8 @@ class NeuralNet(nn.Module):
         Returns a tensor with the result of performing a forward pass on the
         points in `dataset`. 
         """
+        self._assert_initialized()
+
         dataloader = DataLoader(dataset, batch_size=batch_size)
         l_out = []
         self.eval()
@@ -103,6 +132,19 @@ class NeuralNet(nn.Module):
             l_out.append(m_targets_batch_pred.detach().numpy())
 
         return np.concatenate(l_out, axis=0)
+
+    @property
+    def weight_file_path(self):
+        assert self.nn_folder is not None
+        return os.path.join(self.nn_folder, "weights.pth")
+
+    def load_weights_from_path(self, path):
+        checkpoint = torch.load(path, weights_only=True)
+        self.load_state_dict(checkpoint["weights"])
+        #load_optimizer_state(initial_optimizer_state_file)
+
+    def save_weights_to_path(self, path):
+        torch.save({"weights": self.state_dict()}, path)
 
     def fit(self,
             dataset: Dataset,
@@ -170,8 +212,7 @@ class NeuralNet(nn.Module):
             
             """
 
-            save(llp_weight_file)
-            # save_optimizer_state(llp_optim_state_file)
+            self.save_weights_to_path(llp_weight_file)
             self.train()
             ll_loss = [
             ]  # One list per considered batch. Each inner list contains the loss for each distance.
@@ -213,8 +254,7 @@ class NeuralNet(nn.Module):
                         ll_loss) >= llc.max_num_directions:
                     break
 
-            load(llp_weight_file)
-            #load_optimizer_state(llp_optim_state_file)
+            self.load_weights_from_path(llp_weight_file)
             return GFigure(xaxis=llc.neg_gradient_step_scales,
                            yaxis=np.array(ll_loss),
                            xlabel="Step size along the negative gradient",
@@ -226,13 +266,20 @@ class NeuralNet(nn.Module):
                 temp_file_path = temp_file.name
             return temp_file_path
 
-        def save(path):
-            torch.save({"weights": self.state_dict()}, path)
+        def get_weight_file_paths():
 
-        def load(path):
-            checkpoint = torch.load(path, weights_only=True)
-            self.load_state_dict(checkpoint["weights"])
-            #load_optimizer_state(initial_optimizer_state_file)
+            if self.nn_folder is None:
+                best_train_loss_file = get_temp_file_path()
+                best_val_loss_file = get_temp_file_path()
+            else:
+                os.makedirs(self.nn_folder, exist_ok=True)
+                if val_split != 0:
+                    best_train_loss_file = get_temp_file_path()
+                    best_val_loss_file = self.weight_file_path
+                else:
+                    best_train_loss_file = self.weight_file_path
+                    best_val_loss_file = get_temp_file_path()
+            return best_train_loss_file, best_val_loss_file
 
         def save_optimizer_state(path):
             torch.save({"state": optimizer.state_dict()}, path)
@@ -253,6 +300,8 @@ class NeuralNet(nn.Module):
             for ind_group in range(len(optimizer.param_groups)):
                 optimizer.param_groups[ind_group][
                     "lr"] = l_lr[ind_group] * lr_decay
+
+        self._assert_initialized()
 
         batch_size_eval = batch_size_eval if batch_size_eval else batch_size
 
@@ -278,17 +327,15 @@ class NeuralNet(nn.Module):
         l_llplots = []  # loss landscape plots
         llp_weight_file = get_temp_file_path(
         )  # file to restore the weights when the loss landscape needs to be plotted
-        llp_optim_state_file = get_temp_file_path(
-        )  # file to restore the optimizer state when the loss landscape needs to be plotted
+
         best_train_loss = torch.inf
         #num_epochs_left_to_expire_patience = patience
         num_epochs_left_to_expire_lr_patience = lr_patience
-        best_train_loss_file = get_temp_file_path()
-        best_val_loss_file = get_temp_file_path()
+        best_train_loss_file, best_val_loss_file = get_weight_file_paths()
+
         initial_optimizer_state_file = get_temp_file_path()
         save_optimizer_state(initial_optimizer_state_file)
 
-        # for ind_epoch in tqdm(range(num_epochs)):
         for ind_epoch in range(num_epochs):
             self.train()
             loss_train_me_this_epoch = self._run_epoch(dataloader_train,
@@ -309,7 +356,7 @@ class NeuralNet(nn.Module):
 
             ind_epoch_best_loss_val = np.argmin(l_loss_val)
             if ind_epoch_best_loss_val == ind_epoch:
-                save(best_val_loss_file)
+                self.save_weights_to_path(best_val_loss_file)
 
             if patience:
                 if ind_epoch_best_loss_val + patience < ind_epoch:
@@ -319,13 +366,13 @@ class NeuralNet(nn.Module):
             if lr_patience:
                 if loss_train_this_epoch < best_train_loss:
                     best_train_loss = loss_train_this_epoch
-                    save(best_train_loss_file)
+                    self.save_weights_to_path(best_train_loss_file)
                     num_epochs_left_to_expire_lr_patience = lr_patience
                 else:
                     num_epochs_left_to_expire_lr_patience -= 1
                     if num_epochs_left_to_expire_lr_patience == 0:
                         decrease_lr(optimizer, lr_decay)
-                        load(best_train_loss_file)
+                        self.load_weights_from_path(best_train_loss_file)
                         num_epochs_left_to_expire_lr_patience = lr_patience
 
             # Loss landscapes
@@ -336,9 +383,9 @@ class NeuralNet(nn.Module):
 
         if best_weights and num_epochs > 0:
             if val_split != 0:
-                load(best_val_loss_file)
+                self.load_weights_from_path(best_val_loss_file)
             else:
-                load(best_train_loss_file)
+                self.load_weights_from_path(best_train_loss_file)
 
         return {
             'train_loss_me': l_loss_train_me,
