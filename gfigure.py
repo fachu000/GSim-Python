@@ -7,6 +7,8 @@ from IPython.core.debugger import set_trace
 
 title_to_caption = False
 default_figsize = None  # `None` lets plt choose
+
+default_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 """
 
 The easiest way to learn how to use this module is to run the examples at the
