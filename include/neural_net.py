@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from gsim.gfigure import GFigure
 from tqdm import tqdm
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, Subset
 
 
 class LossLandscapeConfig():
@@ -58,6 +58,17 @@ class NeuralNet(nn.Module):
         self.device_type = ("cuda" if torch.cuda.is_available() else "mps"
                             if torch.backends.mps.is_available() else "cpu")
         print(f"Using {self.device_type} device")
+        if nn_folder is None:
+            print()
+            print(
+                "* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *"
+            )
+            print(
+                "*   WARNING: The weights of the network are not being saved.")
+            print(
+                "* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *"
+            )
+            print()
         self.nn_folder = nn_folder
 
     def initialize(self):
@@ -332,8 +343,12 @@ class NeuralNet(nn.Module):
 
         self.to(device=self.device_type)
 
-        dataset_train, dataset_val = random_split(dataset,
-                                                  [1 - val_split, val_split])
+        # dataset_train, dataset_val = random_split(dataset,
+        #                                           [1 - val_split, val_split])
+        num_examples_val = int(val_split * len(dataset))
+        dataset_train = Subset(dataset, range(len(dataset) - num_examples_val))
+        dataset_val = Subset(
+            dataset, range(len(dataset) - num_examples_val, len(dataset)))
 
         dataloader_train = DataLoader(dataset_train,
                                       batch_size=batch_size,
