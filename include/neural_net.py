@@ -4,7 +4,7 @@ import tempfile
 import numpy as np
 import torch
 from torch import nn
-from gsim.gfigure import GFigure
+from gsim import GFigure
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader, random_split, Subset
 
@@ -81,6 +81,19 @@ class NeuralNet(nn.Module):
     def _assert_initialized(self):
         assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
 
+    def _get_loss(self, m_data, f_loss):
+        m_feat_batch, v_targets_batch = m_data
+        m_feat_batch = m_feat_batch.float().to(self.device_type)
+        v_targets_batch = v_targets_batch.float().to(self.device_type)
+
+        v_targets_batch_pred = self(m_feat_batch.float())
+        assert v_targets_batch_pred.shape == v_targets_batch.shape
+        loss = f_loss(v_targets_batch_pred.float(), v_targets_batch.float())
+
+        assert loss.shape[0] == m_feat_batch.shape[
+            0] and loss.ndim == 1, "f_loss must return a vector of length batch_size."
+        return loss
+
     def _run_epoch(self, dataloader, f_loss, optimizer=None):
         """
         Args:
@@ -92,24 +105,19 @@ class NeuralNet(nn.Module):
             targets.shape[0] = batch_size is a vector of length batch_size.
         
         """
+
         l_loss_this_epoch = []
         iterator = tqdm(dataloader) if optimizer else dataloader
-        for m_feat_batch, v_targets_batch in iterator:
-            m_feat_batch = m_feat_batch.float().to(self.device_type)
-            v_targets_batch = v_targets_batch.float().to(self.device_type)
+        for m_data in iterator:
 
             if optimizer:
-                v_targets_batch_pred = self(m_feat_batch.float())
-                loss = f_loss(v_targets_batch_pred.float(),
-                              v_targets_batch.float())
+                loss = self._get_loss(m_data, f_loss)
                 torch.mean(loss).backward()
                 optimizer.step()
                 optimizer.zero_grad()
             else:
                 with torch.no_grad():
-                    v_targets_batch_pred = self(m_feat_batch.float())
-                    loss = f_loss(v_targets_batch_pred.float(),
-                                  v_targets_batch.float())
+                    loss = self._get_loss(m_data, f_loss)
 
             l_loss_this_epoch.append(loss.cpu().detach().numpy())
 
@@ -175,7 +183,7 @@ class NeuralNet(nn.Module):
             best_weights=True,
             patience=None,
             lr_patience=None,
-            lr_decay=None,
+            lr_decay=.8,
             llc=LossLandscapeConfig()):
         """ 
         Args:
@@ -343,8 +351,8 @@ class NeuralNet(nn.Module):
 
         self.to(device=self.device_type)
 
-        # dataset_train, dataset_val = random_split(dataset,
-        #                                           [1 - val_split, val_split])
+        # The data is deterministically split into training and validation sets
+        # so that we can resume training.
         num_examples_val = int(val_split * len(dataset))
         dataset_train = Subset(dataset, range(len(dataset) - num_examples_val))
         dataset_val = Subset(
@@ -356,9 +364,10 @@ class NeuralNet(nn.Module):
         dataloader_train_eval = DataLoader(dataset_train,
                                            batch_size=batch_size_eval,
                                            shuffle=shuffle)
-        dataloader_val = DataLoader(dataset_val,
-                                    batch_size=batch_size,
-                                    shuffle=shuffle)
+        if num_examples_val:
+            dataloader_val = DataLoader(dataset_val,
+                                        batch_size=batch_size,
+                                        shuffle=shuffle)
 
         d_hist = load_hist()
         l_loss_train_me = d_hist['train_loss_me']
@@ -386,7 +395,8 @@ class NeuralNet(nn.Module):
             loss_train_this_epoch = self._run_epoch(dataloader_train_eval,
                                                     f_loss)
             self.eval()
-            loss_val_this_epoch = self._run_epoch(dataloader_val, f_loss)
+            loss_val_this_epoch = self._run_epoch(
+                dataloader_val, f_loss) if num_examples_val else np.nan
 
             print(
                 f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.2f}, train loss = {loss_train_this_epoch:.2f}, val loss = {loss_val_this_epoch:.2f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
@@ -406,17 +416,20 @@ class NeuralNet(nn.Module):
                     print("Patience expired.")
                     break
 
-            if lr_patience:
+            if lr_patience or val_split == 0:
+                # The weights should also be stored when val_split==0 since they
+                # need to be returned at the end.
                 if loss_train_this_epoch < best_train_loss:
                     best_train_loss = loss_train_this_epoch
                     self.save_weights_to_path(best_train_loss_file)
                     num_epochs_left_to_expire_lr_patience = lr_patience
                 else:
-                    num_epochs_left_to_expire_lr_patience -= 1
-                    if num_epochs_left_to_expire_lr_patience == 0:
-                        decrease_lr(optimizer, lr_decay)
-                        self.load_weights_from_path(best_train_loss_file)
-                        num_epochs_left_to_expire_lr_patience = lr_patience
+                    if lr_patience:
+                        num_epochs_left_to_expire_lr_patience -= 1
+                        if num_epochs_left_to_expire_lr_patience == 0:
+                            decrease_lr(optimizer, lr_decay)
+                            self.load_weights_from_path(best_train_loss_file)
+                            num_epochs_left_to_expire_lr_patience = lr_patience
 
             # Loss landscapes
             if ind_epoch - ind_epoch_start in llc.epoch_inds:
@@ -452,3 +465,63 @@ class NeuralNet(nn.Module):
         G.next_subplot(xlabel="Epoch", ylabel="Learning rate")
         G.add_curve(yaxis=d_metrics_train["lr"], legend="Learning rate")
         return [G] + d_metrics_train["l_loss_landscapes"]
+
+
+if __name__ == "__main__":
+    """
+    To run this test code, execute:
+
+    python -m gsim.include.neural_net
+
+    from the root folder of the repository.
+    
+    """
+
+    class MyDataset(Dataset):
+
+        def __init__(self, num_examples):
+            self.num_examples = num_examples
+            self.m_feat = torch.randn(num_examples, 2)
+            self.m_targets = torch.sum(
+                self.m_feat, dim=1,
+                keepdim=True) + 0.5 * torch.randn(num_examples, 1)
+
+        def __len__(self):
+            return self.num_examples
+
+        def __getitem__(self, ind):
+            return self.m_feat[ind], self.m_targets[ind]
+
+    class MyNet(NeuralNet):
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.fc = nn.Linear(2, 1)
+            self.initialize()
+
+        def forward(self, x):
+            return self.fc(x)
+
+    dataset = MyDataset(1000)
+    net = MyNet()
+
+    f_loss = lambda m_pred, m_targets: torch.mean(
+        (m_targets - m_pred)**2, dim=1)
+
+    optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
+    d_training_history = net.fit(dataset,
+                                 optimizer,
+                                 val_split=0.2,
+                                 lr_patience=20,
+                                 num_epochs=200,
+                                 batch_size=200,
+                                 f_loss=f_loss,
+                                 llc=LossLandscapeConfig(
+                                     epoch_inds=[199, 399],
+                                     neg_gradient_step_scales=np.linspace(
+                                         -0.2, 0.3, 13)))
+    d_metrics = net.evaluate(dataset, batch_size=32, f_loss=f_loss)
+    print(d_metrics)
+    l_G = net.plot_training_history(d_training_history)
+    [G.plot() for G in l_G]
+    GFigure.show()
