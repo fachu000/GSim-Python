@@ -164,7 +164,9 @@ class NeuralNet(nn.Module):
         return os.path.join(self.nn_folder, "hist.pk")
 
     def load_weights_from_path(self, path):
-        checkpoint = torch.load(path, weights_only=True)
+        checkpoint = torch.load(path,
+                                weights_only=True,
+                                map_location=self.device_type)
         self.load_state_dict(checkpoint["weights"])
         #load_optimizer_state(initial_optimizer_state_file)
 
