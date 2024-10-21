@@ -354,6 +354,7 @@ class Subplot:
                  legend_loc=None,
                  create_curves=True,
                  num_legend_cols=1,
+                 sharex=None,
                  **kwargs):
         """
       For a description of the arguments, see GFigure.__init__
@@ -375,6 +376,7 @@ class Subplot:
         self.legend_loc = legend_loc
         self.num_legend_cols = num_legend_cols
         self.l_curves = []
+        self.sharex = sharex
         if create_curves:
             self.add_curve(**kwargs)
 
@@ -780,6 +782,8 @@ class GFigure:
         
       num_legend_cols: int, number of columns in the legend.
 
+      sharex: Set to true so that the x-axis is shared with the previous subplot. 
+
       CURVE ARGUMENTS:
       =================
 
@@ -1038,10 +1042,14 @@ class GFigure:
 
         # Actual plotting operation
         for index, subplot in enumerate(self.l_subplots):
-            axis = plt.subplot(self.num_subplot_rows,
-                               self.num_subplot_columns,
-                               index + 1,
-                               projection=self.l_subplots[index].projection)
+            if index > 0:
+                prev_axis = axis
+            axis = plt.subplot(
+                self.num_subplot_rows,
+                self.num_subplot_columns,
+                index + 1,
+                sharex=prev_axis if index > 0 and subplot.sharex else None,
+                projection=self.l_subplots[index].projection)
             if self.l_subplots[index] is not None:
 
                 self.l_subplots[index].plot(axis=axis)

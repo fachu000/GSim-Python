@@ -412,7 +412,8 @@ class NeuralNet(nn.Module):
                 self.save_weights_to_path(best_val_loss_file)
 
             if patience:
-                if ind_epoch_best_loss_val + patience < ind_epoch:
+                if np.max([ind_epoch_best_loss_val, ind_epoch_start
+                           ]) + patience < ind_epoch:
                     print("Patience expired.")
                     break
 
@@ -462,7 +463,7 @@ class NeuralNet(nn.Module):
         for key in d_metrics_train.keys():
             if key not in ["lr", "l_loss_landscapes", "ind_epoch"]:
                 G.add_curve(yaxis=d_metrics_train[key], legend=key)
-        G.next_subplot(xlabel="Epoch", ylabel="Learning rate")
+        G.next_subplot(xlabel="Epoch", ylabel="Learning rate", sharex=True)
         G.add_curve(yaxis=d_metrics_train["lr"], legend="Learning rate")
         return [G] + d_metrics_train["l_loss_landscapes"]
 
