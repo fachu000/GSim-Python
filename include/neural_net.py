@@ -176,6 +176,7 @@ class NeuralNet(nn.Module):
             optimizer,
             num_epochs,
             f_loss,
+            dataset_val=None,
             batch_size=32,
             batch_size_eval=None,
             shuffle=True,
@@ -310,7 +311,9 @@ class NeuralNet(nn.Module):
             torch.save({"state": optimizer.state_dict()}, path)
 
         def load_optimizer_state(path):
-            checkpoint = torch.load(path, weights_only=True)
+            checkpoint = torch.load(path,
+                                    weights_only=True,
+                                    map_location=self.device_type)
             optimizer.load_state_dict(checkpoint["state"])
 
         def decrease_lr(optimizer, lr_decay):
@@ -351,12 +354,17 @@ class NeuralNet(nn.Module):
 
         self.to(device=self.device_type)
 
-        # The data is deterministically split into training and validation sets
-        # so that we can resume training.
-        num_examples_val = int(val_split * len(dataset))
-        dataset_train = Subset(dataset, range(len(dataset) - num_examples_val))
-        dataset_val = Subset(
-            dataset, range(len(dataset) - num_examples_val, len(dataset)))
+        if dataset_val is None:
+            # The data is deterministically split into training and validation
+            # sets so that we can resume training.
+            num_examples_val = int(val_split * len(dataset))
+            dataset_train = Subset(dataset,
+                                   range(len(dataset) - num_examples_val))
+            dataset_val = Subset(
+                dataset, range(len(dataset) - num_examples_val, len(dataset)))
+        else:
+            dataset_train = dataset
+            num_examples_val = len(dataset_val)
 
         dataloader_train = DataLoader(dataset_train,
                                       batch_size=batch_size,
@@ -364,10 +372,10 @@ class NeuralNet(nn.Module):
         dataloader_train_eval = DataLoader(dataset_train,
                                            batch_size=batch_size_eval,
                                            shuffle=shuffle)
-        if num_examples_val:
-            dataloader_val = DataLoader(dataset_val,
-                                        batch_size=batch_size,
-                                        shuffle=shuffle)
+        # if num_examples_val:
+        dataloader_val = DataLoader(dataset_val,
+                                    batch_size=batch_size,
+                                    shuffle=shuffle)
 
         d_hist = load_hist()
         l_loss_train_me = d_hist['train_loss_me']
