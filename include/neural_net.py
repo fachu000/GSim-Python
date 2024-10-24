@@ -354,6 +354,8 @@ class NeuralNet(nn.Module):
 
         self.to(device=self.device_type)
 
+        assert val_split == 0.0 or dataset_val is None
+
         if dataset_val is None:
             # The data is deterministically split into training and validation
             # sets so that we can resume training.
@@ -363,6 +365,7 @@ class NeuralNet(nn.Module):
             dataset_val = Subset(
                 dataset, range(len(dataset) - num_examples_val, len(dataset)))
         else:
+
             dataset_train = dataset
             num_examples_val = len(dataset_val)
 
