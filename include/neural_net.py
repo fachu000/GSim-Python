@@ -197,6 +197,7 @@ class NeuralNet(nn.Module):
 
           `llc`: instance of LossLandscapeConfig.
         
+          At most one of `val_split` and `dataset_val` can be provided.
 
         Returns a dict with keys and values given by:
          
@@ -355,7 +356,6 @@ class NeuralNet(nn.Module):
         self.to(device=self.device_type)
 
         assert val_split == 0.0 or dataset_val is None
-
         if dataset_val is None:
             # The data is deterministically split into training and validation
             # sets so that we can resume training.
@@ -365,7 +365,6 @@ class NeuralNet(nn.Module):
             dataset_val = Subset(
                 dataset, range(len(dataset) - num_examples_val, len(dataset)))
         else:
-
             dataset_train = dataset
             num_examples_val = len(dataset_val)
 
@@ -375,10 +374,10 @@ class NeuralNet(nn.Module):
         dataloader_train_eval = DataLoader(dataset_train,
                                            batch_size=batch_size_eval,
                                            shuffle=shuffle)
-        # if num_examples_val:
-        dataloader_val = DataLoader(dataset_val,
-                                    batch_size=batch_size,
-                                    shuffle=shuffle)
+        if num_examples_val:
+            dataloader_val = DataLoader(dataset_val,
+                                        batch_size=batch_size,
+                                        shuffle=shuffle)
 
         d_hist = load_hist()
         l_loss_train_me = d_hist['train_loss_me']
