@@ -478,7 +478,7 @@ class Subplot:
             ]
             if not np.all(conditions):
                 print(conditions)
-                set_trace()
+                raise ValueError
 
         # Construct Curve objects
         l_curve = []
@@ -598,8 +598,10 @@ class Subplot:
       """
 
         # Expand (broadcast) l_xaxis to have the same length as l_yaxis
-        str_message = "Number of curves in the xaxis must be"\
-            " 1 or equal to the number of curves in the y axis"
+        if len(l_xaxis) > 0 and len(l_yaxis) == 0:
+            raise Exception("The x-axis was provided but the y-axis was not.")
+        str_message = "Number of lists in the xaxis must be"\
+            "0, 1 or equal to the number of curves in the y axis"
         if len(l_xaxis) > 1 and len(l_yaxis) != len(l_xaxis):
             raise Exception(str_message)
         if len(l_xaxis) == 0 and len(l_yaxis) > 0:
