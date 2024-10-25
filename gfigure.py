@@ -7,6 +7,8 @@ from IPython.core.debugger import set_trace
 
 title_to_caption = False
 default_figsize = None  # `None` lets plt choose
+
+default_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 """
 
 The easiest way to learn how to use this module is to run the examples at the
@@ -74,7 +76,8 @@ class Curve:
                  yupper=[],
                  style=None,
                  mode=None,
-                 legend_str=""):
+                 legend_str="",
+                 aspect=None):
         """
 
       See GFigure.__init__ for more information.
@@ -93,6 +96,9 @@ class Curve:
       yaxis.
 
       mode : can be 'plot' or 'stem'
+
+      aspect: can be 'square' or take the values in plt.imshow. It applies only
+      to imshow. 
 
       2. For 3D plots:
       ----------------
@@ -191,6 +197,7 @@ class Curve:
         self.zaxis = zaxis
         self.zinterpolation = zinterpolation
         self.image = None
+        self.aspect = aspect
 
     def __repr__(self):
         return f"<Curve: legend_str = {self.legend_str}, num_points = {len(self.yaxis)}>"
@@ -278,6 +285,8 @@ class Curve:
                 m_Z = self.zaxis
 
         if self.mode == 'imshow':
+            aspect = (m_X[-1, -1] - m_X[-1, 0]) / (m_Y[-1, 0] - m_Y[0, 0]) if (
+                hasattr(self, "aspect") and self.aspect == "square") else None
             self.image = axis.imshow(
                 m_Z,
                 interpolation=self.zinterpolation,
@@ -285,17 +294,18 @@ class Curve:
                 # origin='lower',
                 extent=[m_X[-1, 0], m_X[-1, -1], m_Y[-1, 0], m_Y[0, 0]],
                 vmax=zlim[1] if zlim else None,
+                aspect=aspect,
                 vmin=zlim[0] if zlim else None)
         elif self.mode == 'contour3D':
-            axis.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
+            self.image = axis.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
         elif self.mode == 'surface':
-            axis.plot_surface(m_X,
-                              m_Y,
-                              m_Z,
-                              rstride=1,
-                              cstride=1,
-                              cmap='viridis',
-                              edgecolor='none')
+            self.image = axis.plot_surface(m_X,
+                                           m_Y,
+                                           m_Z,
+                                           rstride=1,
+                                           cstride=1,
+                                           cmap='viridis',
+                                           edgecolor='none')
 
         else:
             raise ValueError(f'Unrecognized 3D plotting mode. Got {self.mode}')
@@ -339,10 +349,12 @@ class Subplot:
                  ylim=None,
                  zlim=None,
                  xticks=None,
+                 num_xticks_decimal_places=None,
                  yticks=None,
                  legend_loc=None,
                  create_curves=True,
                  num_legend_cols=1,
+                 sharex=None,
                  **kwargs):
         """
       For a description of the arguments, see GFigure.__init__
@@ -359,10 +371,12 @@ class Subplot:
         self.ylim = ylim
         self.zlim = zlim
         self.xticks = xticks
+        self.num_xticks_decimal_places = num_xticks_decimal_places
         self.yticks = yticks
         self.legend_loc = legend_loc
         self.num_legend_cols = num_legend_cols
         self.l_curves = []
+        self.sharex = sharex
         if create_curves:
             self.add_curve(**kwargs)
 
@@ -393,7 +407,8 @@ class Subplot:
                   yupper=[],
                   styles=[],
                   mode=None,
-                  legend=tuple()):
+                  legend=tuple(),
+                  aspect=None):
         """
       Adds one or multiple curves to `self`. See documentation of GFigure.__init__
       """
@@ -414,7 +429,8 @@ class Subplot:
                       yaxis=yaxis,
                       zaxis=zaxis,
                       zinterpolation=zinterpolation,
-                      mode=mode))
+                      mode=mode,
+                      aspect=aspect))
 
     def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
                                      legend, mode):
@@ -439,8 +455,9 @@ class Subplot:
         else:
             #   if len(l_style) < len(l_xaxis):
             #       raise ValueError("The length of the styles argument needs to be at least the number of curves.")
-            assert len(l_style) >= len(l_xaxis), "The length of `style` must be"\
-                  " either 1 or no less than the number of curves"
+            assert len(l_style) >= len(
+                l_xaxis
+            ), "The length of `style` must be" " either 1 or no less than the number of curves"
             l_style = l_style[0:len(l_xaxis)]
 
         # Process the legend
@@ -498,8 +515,7 @@ class Subplot:
         """
       Returns a list of str. 
       """
-        err_msg = "Style argument must be an str "\
-            "or list of str"
+        err_msg = "Style argument must be an str " "or list of str"
         if type(style_arg) == str:
             return [style_arg]
         elif type(style_arg) == list:
@@ -600,8 +616,7 @@ class Subplot:
         # Expand (broadcast) l_xaxis to have the same length as l_yaxis
         if len(l_xaxis) > 0 and len(l_yaxis) == 0:
             raise Exception("The x-axis was provided but the y-axis was not.")
-        str_message = "Number of lists in the xaxis must be"\
-            "0, 1 or equal to the number of curves in the y axis"
+        str_message = "Number of lists in the xaxis must be" "0, 1 or equal to the number of curves in the y axis"
         if len(l_xaxis) > 1 and len(l_yaxis) != len(l_xaxis):
             raise Exception(str_message)
         if len(l_xaxis) == 0 and len(l_yaxis) > 0:
@@ -639,6 +654,13 @@ class Subplot:
         # X ticks
         if hasattr(self, "xticks"):
             plt.xticks(self.xticks)
+
+        if hasattr(self, "num_xticks_decimal_places"
+                   ) and self.num_xticks_decimal_places is not None:
+            import matplotlib.ticker as ticker
+            plt.gca().xaxis.set_major_formatter(
+                ticker.FormatStrFormatter(
+                    f'%.{self.num_xticks_decimal_places}f'))
 
         # Y ticks
         if hasattr(self, "yticks"):
@@ -760,6 +782,8 @@ class GFigure:
         
       num_legend_cols: int, number of columns in the legend.
 
+      sharex: Set to true so that the x-axis is shared with the previous subplot. 
+
       CURVE ARGUMENTS:
       =================
 
@@ -844,6 +868,9 @@ class GFigure:
       global_color_bar_label: str indicating the label of the global color bar.
 
       global_color_bar_position: vector with four entries.
+
+      aspect: can be 'square' or take the values in plt.imshow. It applies only
+      to imshow. 
 
       3. Others
          ---------
@@ -1019,10 +1046,14 @@ class GFigure:
 
         # Actual plotting operation
         for index, subplot in enumerate(self.l_subplots):
-            axis = plt.subplot(self.num_subplot_rows,
-                               self.num_subplot_columns,
-                               index + 1,
-                               projection=self.l_subplots[index].projection)
+            if index > 0:
+                prev_axis = axis
+            axis = plt.subplot(
+                self.num_subplot_rows,
+                self.num_subplot_columns,
+                index + 1,
+                sharex=prev_axis if index > 0 and subplot.sharex else None,
+                projection=self.l_subplots[index].projection)
             if self.l_subplots[index] is not None:
 
                 self.l_subplots[index].plot(axis=axis)
@@ -1260,11 +1291,10 @@ def plot_example_figure(ind_example):
         # 1. Auto axes
         # Format as an image
         m_Z = np.reshape(np.arange(20 * 30), (20, 30))
-        G.next_subplot(
-            zaxis=m_Z,
-            xlabel='columns',
-            ylabel='rows',
-        )
+        G.next_subplot(zaxis=m_Z,
+                       xlabel='columns',
+                       ylabel='rows',
+                       aspect='square')
         G.next_subplot(zaxis=m_Z,
                        xlabel='columns',
                        ylabel='rows',
@@ -1330,6 +1360,24 @@ def plot_example_figure(ind_example):
                                   'density': True
                               },
                               legend='Exponential')
+
+    elif ind_example == 11:
+        # Example of xticks with a fixed number of decimal places
+        v_x = np.linspace(0, 10, 10)
+        v_y = v_x**2
+        G = GFigure(xaxis=v_x,
+                    yaxis=v_y,
+                    xlabel="x",
+                    ylabel="f(x)",
+                    title="Parabola",
+                    num_xticks_decimal_places=3)
+        G.next_subplot(xaxis=v_x,
+                       yaxis=v_y,
+                       xlabel="x",
+                       ylabel="f(x)",
+                       title="Parabola",
+                       num_xticks_decimal_places=2,
+                       xticks=v_x + 0.5)
 
     G.plot()
     plt.show()
