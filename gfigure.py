@@ -732,6 +732,7 @@ class GFigure:
                  ind_active_subplot=0,
                  num_subplot_rows=None,
                  num_subplot_columns=1,
+                 transpose_subplots=False,
                  global_color_bar=False,
                  global_color_bar_label="",
                  global_color_bar_position=[0.85, 0.35, 0.02, 0.5],
@@ -782,7 +783,11 @@ class GFigure:
         
       num_legend_cols: int, number of columns in the legend.
 
-      sharex: Set to true so that the x-axis is shared with the previous subplot. 
+      sharex: Set to true so that the x-axis is shared with the previous
+      subplot. 
+
+      transpose_subplots: if True, the second subplot is placed at position
+      (1,0), the third at (2,0), etc. 
 
       CURVE ARGUMENTS:
       =================
@@ -930,6 +935,7 @@ class GFigure:
 
         self.num_subplot_rows = num_subplot_rows
         self.num_subplot_columns = num_subplot_columns
+        self.transpose_subplots = transpose_subplots
         self.figsize = figsize
         self.global_color_bar = global_color_bar
         self.global_color_bar_label = global_color_bar_label
@@ -1043,6 +1049,11 @@ class GFigure:
         # Unify zlimits if required
         if hasattr(self, "global_color_bar") and self.global_color_bar:
             self.unify_zlim_intervals()
+
+        # Transpose the subplots if needed
+        if self.transpose_subplots:
+            self.l_subplots = np.array(self.l_subplots).reshape(
+                self.num_subplot_columns, self.num_subplot_rows).T.flatten()
 
         # Actual plotting operation
         for index, subplot in enumerate(self.l_subplots):
