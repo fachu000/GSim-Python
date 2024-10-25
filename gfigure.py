@@ -1011,6 +1011,10 @@ class GFigure:
             self.l_subplots[0].title = ""
             print("Caption: ", self.str_caption)
 
+        # Unify zlimits if required
+        if hasattr(self, "global_color_bar") and self.global_color_bar:
+            self.unify_zlim_intervals()
+
         # Actual plotting operation
         for index, subplot in enumerate(self.l_subplots):
             axis = plt.subplot(self.num_subplot_rows,
@@ -1087,6 +1091,24 @@ class GFigure:
     @staticmethod
     def show():
         plt.show()
+
+    def unify_zlim_intervals(self):
+        """Sets the zlimits of all subplots to be the same. This is useful e.g. to have a global color bar."""
+
+        # Unify zlim intervals
+        def get_zlim(subplot):
+            if subplot.zlim is not None:
+                return subplot.zlim
+            else:
+                zvals = np.concatenate(
+                    [curve.zaxis for curve in subplot.l_curves])
+                return [np.min(zvals), np.max(zvals)]
+
+        l_zlims = np.concatenate(
+            [get_zlim(subplot) for subplot in self.l_subplots])
+        zlims = [np.min(l_zlims), np.max(l_zlims)]
+        for subplot in self.l_subplots:
+            subplot.zlim = zlims
 
 
 def plot_example_figure(ind_example):
