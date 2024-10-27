@@ -197,7 +197,8 @@ class NeuralNet(nn.Module):
 
           `llc`: instance of LossLandscapeConfig.
         
-          At most one of `val_split` and `dataset_val` can be provided.
+          At most one of `val_split` and `dataset_val` can be provided. If one
+          is provided, we say that `val` is True. 
 
         Returns a dict with keys and values given by:
          
@@ -211,7 +212,7 @@ class NeuralNet(nn.Module):
           training loss computed at the end of each epoch.
 
           'val_loss': same as before but for the validation loss. Only if
-          val_split != 0. 
+          `val` is true. 
 
           'lr': list of length num_epochs with the learning rate at each epoch.
 
@@ -221,10 +222,10 @@ class NeuralNet(nn.Module):
         of the execution of this function equal the weights at the last epoch.
         Otherwise: 
          
-          - if val_split != 0, then the weights of the epoch with the
+          - if `val` is True, then the weights of the epoch with the
         best validation loss are returned; 
         
-          - if val_split == 0, then the weights of the epoch with the
+          - if `val` is False, then the weights of the epoch with the
         best training loss are returned; 
 
         """
@@ -300,7 +301,7 @@ class NeuralNet(nn.Module):
                 best_val_loss_file = get_temp_file_path()
             else:
                 os.makedirs(self.nn_folder, exist_ok=True)
-                if val_split != 0:
+                if val:
                     best_train_loss_file = get_temp_file_path()
                     best_val_loss_file = self.weight_file_path
                 else:
@@ -350,6 +351,7 @@ class NeuralNet(nn.Module):
             return d_hist
 
         self._assert_initialized()
+        torch.cuda.empty_cache()
 
         batch_size_eval = batch_size_eval if batch_size_eval else batch_size
 
@@ -367,6 +369,7 @@ class NeuralNet(nn.Module):
         else:
             dataset_train = dataset
             num_examples_val = len(dataset_val)
+        val = num_examples_val > 0
 
         dataloader_train = DataLoader(dataset_train,
                                       batch_size=batch_size,
@@ -374,7 +377,7 @@ class NeuralNet(nn.Module):
         dataloader_train_eval = DataLoader(dataset_train,
                                            batch_size=batch_size_eval,
                                            shuffle=shuffle)
-        if num_examples_val:
+        if val:
             dataloader_val = DataLoader(dataset_val,
                                         batch_size=batch_size,
                                         shuffle=shuffle)
@@ -405,8 +408,8 @@ class NeuralNet(nn.Module):
             loss_train_this_epoch = self._run_epoch(dataloader_train_eval,
                                                     f_loss)
             self.eval()
-            loss_val_this_epoch = self._run_epoch(
-                dataloader_val, f_loss) if num_examples_val else np.nan
+            loss_val_this_epoch = self._run_epoch(dataloader_val,
+                                                  f_loss) if val else np.nan
 
             print(
                 f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.2f}, train loss = {loss_train_this_epoch:.2f}, val loss = {loss_val_this_epoch:.2f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
@@ -427,7 +430,7 @@ class NeuralNet(nn.Module):
                     print("Patience expired.")
                     break
 
-            if lr_patience or val_split == 0:
+            if lr_patience or val:
                 # The weights should also be stored when val_split==0 since they
                 # need to be returned at the end.
                 if loss_train_this_epoch < best_train_loss:
@@ -459,7 +462,7 @@ class NeuralNet(nn.Module):
             save_hist(d_hist)
 
         if best_weights and num_epochs > 0:
-            if val_split != 0:
+            if val:
                 self.load_weights_from_path(best_val_loss_file)
             else:
                 self.load_weights_from_path(best_train_loss_file)
@@ -467,12 +470,27 @@ class NeuralNet(nn.Module):
         return d_hist
 
     @staticmethod
-    def plot_training_history(d_metrics_train):
+    def plot_training_history(d_metrics_train, first_epoch_to_plot=0):
         G = GFigure()
-        G.next_subplot(xlabel="Epoch", ylabel="Loss")
+        max_y_value = -np.inf
+        min_y_value = np.inf
+        G.next_subplot(xlabel="Epoch",
+                       ylabel="Loss",
+                       xlim=(first_epoch_to_plot, None))
         for key in d_metrics_train.keys():
             if key not in ["lr", "l_loss_landscapes", "ind_epoch"]:
                 G.add_curve(yaxis=d_metrics_train[key], legend=key)
+                if len(d_metrics_train[key]) > first_epoch_to_plot:
+                    max_y_value = max(
+                        max_y_value,
+                        np.max(d_metrics_train[key][first_epoch_to_plot:]))
+                    min_y_value = min(
+                        min_y_value,
+                        np.min(d_metrics_train[key][first_epoch_to_plot:]))
+        if max_y_value != -np.inf and min_y_value != np.inf:
+            margin = 0.1 * (max_y_value - min_y_value)
+            G.l_subplots[-1].ylim = (min_y_value - margin,
+                                     max_y_value + margin)
         G.next_subplot(xlabel="Epoch", ylabel="Learning rate", sharex=True)
         G.add_curve(yaxis=d_metrics_train["lr"], legend="Learning rate")
         return [G] + d_metrics_train["l_loss_landscapes"]
