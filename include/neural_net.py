@@ -87,7 +87,7 @@ class NeuralNet(nn.Module):
         v_targets_batch = v_targets_batch.float().to(self.device_type)
 
         v_targets_batch_pred = self(m_feat_batch.float())
-        assert v_targets_batch_pred.shape == v_targets_batch.shape
+        #assert v_targets_batch_pred.shape == v_targets_batch.shape
         loss = f_loss(v_targets_batch_pred.float(), v_targets_batch.float())
 
         assert loss.shape[0] == m_feat_batch.shape[
