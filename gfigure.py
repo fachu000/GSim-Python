@@ -298,6 +298,8 @@ class Curve:
                 vmin=zlim[0] if zlim else None)
         elif self.mode == 'contour3D':
             self.image = axis.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
+            if zlim is not None:
+                axis.set_zlim(zlim[0], zlim[1])
         elif self.mode == 'surface':
             self.image = axis.plot_surface(m_X,
                                            m_Y,
@@ -306,7 +308,8 @@ class Curve:
                                            cstride=1,
                                            cmap='viridis',
                                            edgecolor='none')
-
+            if zlim is not None:
+                axis.set_zlim(zlim[0], zlim[1])
         else:
             raise ValueError(f'Unrecognized 3D plotting mode. Got {self.mode}')
 
