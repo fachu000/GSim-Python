@@ -304,7 +304,8 @@ class Curve:
                                            cstride=1,
                                            cmap='viridis',
                                            edgecolor='none')
-
+            if zlim is not None:
+                axis.set_zlim(zlim[0], zlim[1])
         else:
             raise ValueError(f'Unrecognized 3D plotting mode. Got {self.mode}')
 
