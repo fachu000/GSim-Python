@@ -7,6 +7,8 @@ from IPython.core.debugger import set_trace
 
 title_to_caption = False
 default_figsize = None  # `None` lets plt choose
+
+default_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 """
 
 The easiest way to learn how to use this module is to run the examples at the
@@ -353,6 +355,7 @@ class Subplot:
                  legend_loc=None,
                  create_curves=True,
                  num_legend_cols=1,
+                 sharex=None,
                  **kwargs):
         """
       For a description of the arguments, see GFigure.__init__
@@ -374,6 +377,7 @@ class Subplot:
         self.legend_loc = legend_loc
         self.num_legend_cols = num_legend_cols
         self.l_curves = []
+        self.sharex = sharex
         if create_curves:
             self.add_curve(**kwargs)
 
@@ -729,6 +733,7 @@ class GFigure:
                  ind_active_subplot=0,
                  num_subplot_rows=None,
                  num_subplot_columns=1,
+                 transpose_subplots=False,
                  global_color_bar=False,
                  global_color_bar_label="",
                  global_color_bar_position=[0.85, 0.35, 0.02, 0.5],
@@ -778,6 +783,12 @@ class GFigure:
           "lower left", "upper right", etc.
         
       num_legend_cols: int, number of columns in the legend.
+
+      sharex: Set to true so that the x-axis is shared with the previous
+      subplot. 
+
+      transpose_subplots: if True, the second subplot is placed at position
+      (1,0), the third at (2,0), etc. 
 
       CURVE ARGUMENTS:
       =================
@@ -925,6 +936,7 @@ class GFigure:
 
         self.num_subplot_rows = num_subplot_rows
         self.num_subplot_columns = num_subplot_columns
+        self.transpose_subplots = transpose_subplots
         self.figsize = figsize
         self.global_color_bar = global_color_bar
         self.global_color_bar_label = global_color_bar_label
@@ -1035,12 +1047,25 @@ class GFigure:
             self.l_subplots[0].title = ""
             print("Caption: ", self.str_caption)
 
+        # Unify zlimits if required
+        if hasattr(self, "global_color_bar") and self.global_color_bar:
+            self.unify_zlim_intervals()
+
+        # Transpose the subplots if needed
+        if self.transpose_subplots:
+            self.l_subplots = np.array(self.l_subplots).reshape(
+                self.num_subplot_columns, self.num_subplot_rows).T.flatten()
+
         # Actual plotting operation
         for index, subplot in enumerate(self.l_subplots):
-            axis = plt.subplot(self.num_subplot_rows,
-                               self.num_subplot_columns,
-                               index + 1,
-                               projection=self.l_subplots[index].projection)
+            if index > 0:
+                prev_axis = axis
+            axis = plt.subplot(
+                self.num_subplot_rows,
+                self.num_subplot_columns,
+                index + 1,
+                sharex=prev_axis if index > 0 and subplot.sharex else None,
+                projection=self.l_subplots[index].projection)
             if self.l_subplots[index] is not None:
 
                 self.l_subplots[index].plot(axis=axis)
@@ -1111,6 +1136,24 @@ class GFigure:
     @staticmethod
     def show():
         plt.show()
+
+    def unify_zlim_intervals(self):
+        """Sets the zlimits of all subplots to be the same. This is useful e.g. to have a global color bar."""
+
+        # Unify zlim intervals
+        def get_zlim(subplot):
+            if subplot.zlim is not None:
+                return subplot.zlim
+            else:
+                zvals = np.concatenate(
+                    [curve.zaxis for curve in subplot.l_curves])
+                return [np.min(zvals), np.max(zvals)]
+
+        l_zlims = np.concatenate(
+            [get_zlim(subplot) for subplot in self.l_subplots])
+        zlims = [np.min(l_zlims), np.max(l_zlims)]
+        for subplot in self.l_subplots:
+            subplot.zlim = zlims
 
 
 def plot_example_figure(ind_example):
