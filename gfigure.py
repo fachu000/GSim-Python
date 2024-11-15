@@ -1144,9 +1144,12 @@ class GFigure:
             if subplot.zlim is not None:
                 return subplot.zlim
             else:
-                zvals = np.concatenate(
-                    [curve.zaxis for curve in subplot.l_curves])
-                return [np.min(zvals), np.max(zvals)]
+                zvals = np.concatenate([
+                    curve.zaxis.flatten() for curve in subplot.l_curves
+                    if curve.zaxis is not None
+                ])
+
+                return [np.nanmin(zvals), np.nanmax(zvals)]
 
         l_zlims = np.concatenate(
             [get_zlim(subplot) for subplot in self.l_subplots])
