@@ -40,7 +40,7 @@ class NeuralNet(nn.Module):
 
     _initialized = False
 
-    def __init__(self, *args, nn_folder=None, **kwargs):
+    def __init__(self, *args, nn_folder=None, device_type=None, **kwargs):
         """
         
         Args: 
@@ -55,8 +55,12 @@ class NeuralNet(nn.Module):
         """
 
         super().__init__(*args, **kwargs)
-        self.device_type = ("cuda" if torch.cuda.is_available() else "mps"
-                            if torch.backends.mps.is_available() else "cpu")
+        if device_type is not None:
+            self.device_type = device_type
+        else:
+            self.device_type = (
+                "cuda" if torch.cuda.is_available() else
+                "mps" if torch.backends.mps.is_available() else "cpu")
         print(f"Using {self.device_type} device")
         if nn_folder is None:
             print()
@@ -164,7 +168,9 @@ class NeuralNet(nn.Module):
         return os.path.join(self.nn_folder, "hist.pk")
 
     def load_weights_from_path(self, path):
-        checkpoint = torch.load(path, weights_only=True)
+        checkpoint = torch.load(path,
+                                weights_only=True,
+                                map_location=self.device_type)
         self.load_state_dict(checkpoint["weights"])
         #load_optimizer_state(initial_optimizer_state_file)
 
