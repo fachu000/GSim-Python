@@ -119,10 +119,10 @@ class NeuralNet(nn.Module):
                 with torch.no_grad():
                     loss = self._get_loss(m_data, f_loss)
 
-            l_loss_this_epoch.append(loss.cpu().detach().numpy())
+            l_loss_this_epoch.append(loss.detach())
 
-        return np.mean(np.concatenate(
-            l_loss_this_epoch, axis=0)) if len(l_loss_this_epoch) else np.nan
+        return torch.stack(l_loss_this_epoch).mean().cpu().numpy() if len(
+            l_loss_this_epoch) else np.nan
 
     def evaluate(self, dataset, batch_size, f_loss):
         """
@@ -494,6 +494,10 @@ class NeuralNet(nn.Module):
         G.next_subplot(xlabel="Epoch", ylabel="Learning rate", sharex=True)
         G.add_curve(yaxis=d_metrics_train["lr"], legend="Learning rate")
         return [G] + d_metrics_train["l_loss_landscapes"]
+
+    def print_num_parameters(self):
+        total_params = sum(p.numel() for p in self.parameters())
+        print(f'Total number of parameters: {total_params}')
 
 
 if __name__ == "__main__":
