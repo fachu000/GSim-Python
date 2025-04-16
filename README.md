@@ -68,7 +68,7 @@ For debugging, it is comfortable to use the following `launch.json`:
     "configurations": [
         {
             "name": "gsim",
-            "type": "python",
+            "type": "debugpy",
             "program": "${workspaceFolder}/run_experiment.py",
             "args": [
                 "1001"
