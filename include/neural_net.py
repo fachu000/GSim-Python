@@ -85,8 +85,9 @@ class NeuralNet(nn.Module):
     def _assert_initialized(self):
         assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
 
-    def _get_loss(self, m_data, f_loss):
-        m_feat_batch, v_targets_batch = m_data
+    def _get_loss(self, data, f_loss):
+        assert f_loss is not None, "f_loss must be provided unless you override _get_loss."
+        m_feat_batch, v_targets_batch = data
         m_feat_batch = m_feat_batch.float().to(self.device_type)
         v_targets_batch = v_targets_batch.float().to(self.device_type)
 
@@ -112,20 +113,20 @@ class NeuralNet(nn.Module):
 
         l_loss_this_epoch = []
         iterator = tqdm(dataloader) if optimizer else dataloader
-        for m_data in iterator:
+        for data in iterator:
 
             if optimizer:
-                loss = self._get_loss(m_data, f_loss)
+                loss = self._get_loss(data, f_loss)
                 torch.mean(loss).backward()
                 optimizer.step()
                 optimizer.zero_grad()
             else:
                 with torch.no_grad():
-                    loss = self._get_loss(m_data, f_loss)
+                    loss = self._get_loss(data, f_loss)
 
             l_loss_this_epoch.append(loss.detach())
 
-        return torch.stack(l_loss_this_epoch).mean().cpu().numpy() if len(
+        return torch.cat(l_loss_this_epoch).mean().cpu().numpy() if len(
             l_loss_this_epoch) else np.nan
 
     def evaluate(self, dataset, batch_size, f_loss):
@@ -181,7 +182,7 @@ class NeuralNet(nn.Module):
             dataset: Dataset,
             optimizer,
             num_epochs,
-            f_loss,
+            f_loss=None,
             dataset_val=None,
             batch_size=32,
             batch_size_eval=None,
@@ -426,7 +427,8 @@ class NeuralNet(nn.Module):
             l_loss_val.append(loss_val_this_epoch)
             l_lr.append(optimizer.param_groups[0]["lr"])
 
-            ind_epoch_best_loss_val = np.argmin(l_loss_val)
+            ind_epoch_best_loss_val = np.argmin(
+                [v if not np.isnan(v) else np.inf for v in l_loss_val])
             if ind_epoch_best_loss_val == ind_epoch:
                 self.save_weights_to_path(best_val_loss_file)
 
@@ -469,9 +471,11 @@ class NeuralNet(nn.Module):
 
         if best_weights and num_epochs > 0:
             if val:
-                self.load_weights_from_path(best_val_loss_file)
+                if os.path.exists(best_val_loss_file):
+                    self.load_weights_from_path(best_val_loss_file)
             else:
-                self.load_weights_from_path(best_train_loss_file)
+                if os.path.exists(best_train_loss_file):
+                    self.load_weights_from_path(best_train_loss_file)
 
         return d_hist
 
