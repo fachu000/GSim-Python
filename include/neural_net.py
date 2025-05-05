@@ -173,6 +173,7 @@ class NeuralNet(nn.Module):
                                 weights_only=True,
                                 map_location=self.device_type)
         self.load_state_dict(checkpoint["weights"])
+        self.to(device=self.device_type)
         #load_optimizer_state(initial_optimizer_state_file)
 
     def save_weights_to_path(self, path):
