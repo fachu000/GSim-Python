@@ -1,12 +1,14 @@
 import os
 import pickle
 import tempfile
+
 import numpy as np
 import torch
 from torch import nn
-from gsim import GFigure
+from torch.utils.data import DataLoader, Dataset, Subset, random_split
 from tqdm import tqdm
-from torch.utils.data import Dataset, DataLoader, random_split, Subset
+
+from gsim import GFigure
 
 
 class LossLandscapeConfig():
@@ -78,9 +80,14 @@ class NeuralNet(nn.Module):
     def initialize(self):
         self._initialized = True
 
-        if self.nn_folder is not None and os.path.exists(
-                self.weight_file_path):
-            self.load_weights_from_path(self.weight_file_path)
+        if self.nn_folder is not None:
+            if os.path.exists(self.weight_file_path):
+                self.load_weights_from_path(self.weight_file_path)
+                print(f"Weights loaded from {self.weight_file_path}")
+            else:
+                print(
+                    f"Warning: {self.weight_file_path} does not exist. The network will be initialized."
+                )
 
     def _assert_initialized(self):
         assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
