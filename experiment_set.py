@@ -1,13 +1,20 @@
 from IPython.core.debugger import set_trace
 from datetime import timedelta, datetime
 import matplotlib.pyplot as plt
-from gsim.gfigure import GFigure
-from gsim.utils import time_to_str
+
+from .utils import time_to_str
 import os
 import pickle
 
 EXPERIMENT_FUNCTION_BASE_NAME = "experiment_"
 OUTPUT_DATA_FOLDER = "./output/"
+
+
+def is_a_gfigure(obj):
+    """Returns True if `obj` is a GFigure object, False otherwise."""
+    # We check it this way because importing GFigure in the same way is
+    # difficult so that the package works both as a module and standalone.
+    return obj.__class__.__name__ == "GFigure"
 
 
 class AbstractExperimentSet:
@@ -50,11 +57,11 @@ class AbstractExperimentSet:
                 to know whether there are no figures because the experiment has not
                 been run before or because the experiment produces no figures."""
                 l_G = []
-            if type(l_G) == GFigure:
+            if is_a_gfigure(l_G):
                 l_G = [l_G]
             # From this point on, l_G must be a list of GFigure
             if (type(l_G) != list) or (len(l_G) > 0
-                                       and type(l_G[0]) != GFigure):
+                                       and not is_a_gfigure(l_G[0])):
                 raise Exception("""Function %s returns an unexpected type.
                        It must return either None, a GFigure object,
                        or a list of GFigure objects.""" % f_name)

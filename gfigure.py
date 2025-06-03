@@ -1098,7 +1098,10 @@ class GFigure:
 
         return F
 
-    def concatenate(it_gfigs, num_subplot_rows=None, num_subplot_columns=1):
+    @staticmethod
+    def concatenate(it_gfigs,
+                    num_subplot_rows=None,
+                    num_subplot_columns=1) -> "GFigure":
         """Concatenates the subplots of a collection of GFigure objects.
 
      Args:

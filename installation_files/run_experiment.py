@@ -16,6 +16,13 @@ def initialize():
         )
         quit()
 
+    # Add the parent directory (rme) to the Python path so that ml_estimation
+    # can be imported as a proper package with relative imports
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)  # This is the rme directory
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
+
     sys.path.insert(1, './gsim/')
 
 
@@ -27,7 +34,10 @@ import gsim_conf
 
 def load_modules():
     print("Loading modules...", end=' ')
-    module = importlib.import_module(gsim_conf.module_name)
+    # Import the module with the proper package context so relative imports work
+    current_dir = os.path.basename(os.getcwd())
+    module_name_with_package = f"{current_dir}.{gsim_conf.module_name}"
+    module = importlib.import_module(module_name_with_package)
     ExperimentSet = getattr(module, "ExperimentSet")
     print("done")
     return ExperimentSet
