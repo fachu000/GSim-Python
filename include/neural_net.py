@@ -8,7 +8,10 @@ from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset, random_split
 from tqdm import tqdm
 
-from gsim import GFigure
+try:
+    from ...gsim import GFigure
+except ImportError:
+    from gsim import GFigure
 
 
 class LossLandscapeConfig():
