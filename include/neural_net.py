@@ -89,7 +89,7 @@ class NeuralNet(nn.Module):
                 print(f"Weights loaded from {self.weight_file_path}")
             else:
                 print(
-                    f"Warning: {self.weight_file_path} does not exist. The network will be initialized."
+                    f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network will be initialized."
                 )
 
     def _assert_initialized(self):
