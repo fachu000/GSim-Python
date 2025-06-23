@@ -5,9 +5,13 @@ import sys
 import os
 from IPython.core.debugger import set_trace
 import importlib
+from gsim import init_gsim_logger
+
+gsim_logger = init_gsim_logger()
 
 
 def initialize():
+
     if not os.path.exists("./gsim"):
         # If this behavior were changed, the output file storage functionality should be
         # modified accordingly.
@@ -33,13 +37,13 @@ import gsim_conf
 
 
 def load_modules():
-    print("Loading modules...", end=' ')
+    gsim_logger.info("Loading modules...")
     # Import the module with the proper package context so relative imports work
     current_dir = os.path.basename(os.getcwd())
     module_name_with_package = f"{current_dir}.{gsim_conf.module_name}"
     module = importlib.import_module(module_name_with_package)
     ExperimentSet = getattr(module, "ExperimentSet")
-    print("done")
+    gsim_logger.info("Finished loading modules.")
     return ExperimentSet
 
 

@@ -1,7 +1,7 @@
 import os
 import pickle
 import tempfile
-
+import logging
 import numpy as np
 import torch
 from torch import nn
@@ -12,6 +12,8 @@ try:
     from ...gsim import GFigure
 except ImportError:
     from gsim import GFigure
+
+gsim_logger = logging.getLogger("gsim")
 
 
 class LossLandscapeConfig():
@@ -66,18 +68,16 @@ class NeuralNet(nn.Module):
             self.device_type = (
                 "cuda" if torch.cuda.is_available() else
                 "mps" if torch.backends.mps.is_available() else "cpu")
-        print(f"Using {self.device_type} device")
+        gsim_logger.info(f"Using {self.device_type} device")
         if nn_folder is None:
-            print()
-            print(
+            gsim_logger.warning(
                 "* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *"
             )
-            print(
+            gsim_logger.warning(
                 "*   WARNING: The weights of the network are not being saved.")
-            print(
+            gsim_logger.warning(
                 "* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *"
             )
-            print()
         self.nn_folder = nn_folder
 
     def initialize(self):
@@ -86,9 +86,10 @@ class NeuralNet(nn.Module):
         if self.nn_folder is not None:
             if os.path.exists(self.weight_file_path):
                 self.load_weights_from_path(self.weight_file_path)
-                print(f"Weights loaded from {self.weight_file_path}")
+                gsim_logger.info(
+                    f"Weights loaded from {self.weight_file_path}")
             else:
-                print(
+                gsim_logger.warning(
                     f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network will be initialized."
                 )
 
@@ -429,7 +430,7 @@ class NeuralNet(nn.Module):
             loss_val_this_epoch = self._run_epoch(dataloader_val,
                                                   f_loss) if val else np.nan
 
-            print(
+            gsim_logger.info(
                 f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.2f}, train loss = {loss_train_this_epoch:.2f}, val loss = {loss_val_this_epoch:.2f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
             )
 
@@ -446,7 +447,7 @@ class NeuralNet(nn.Module):
             if patience:
                 if np.max([ind_epoch_best_loss_val, ind_epoch_start
                            ]) + patience < ind_epoch:
-                    print("Patience expired.")
+                    gsim_logger.info("Patience expired.")
                     break
 
             if lr_patience or val:

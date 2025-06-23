@@ -1,6 +1,7 @@
 from IPython.core.debugger import set_trace
 from datetime import timedelta, datetime
 import matplotlib.pyplot as plt
+import logging
 
 from .utils import time_to_str
 import os
@@ -8,6 +9,8 @@ import pickle
 
 EXPERIMENT_FUNCTION_BASE_NAME = "experiment_"
 OUTPUT_DATA_FOLDER = "./output/"
+
+gsim_logger = logging.getLogger("gsim")
 
 
 def is_a_gfigure(obj):
@@ -40,16 +43,18 @@ class AbstractExperimentSet:
 
         if f_name in dir(cls):
             start_time = datetime.now()
-            print(
+            gsim_logger.info(
                 "----------------------------------------------------------------------"
             )
-            print(f"Starting experiment {experiment_id} at {datetime.now()}.")
-            print(
+            gsim_logger.info(
+                f"Starting experiment {experiment_id} at {datetime.now()}.")
+            gsim_logger.info(
                 "----------------------------------------------------------------------"
             )
             l_G = getattr(cls, f_name)(l_args)
             end_time = datetime.now()
-            print("Elapsed time = ", time_to_str(end_time - start_time))
+            gsim_logger.info("Elapsed time = ",
+                             time_to_str(end_time - start_time))
 
             # Set l_G to be a (possibly empty) list of GFigure
             if l_G is None:
@@ -68,7 +73,7 @@ class AbstractExperimentSet:
 
             # Store and plot
             if len(l_G) == 0:
-                print("The experiment returned no GFigures.")
+                gsim_logger.info("The experiment returned no GFigures.")
             else:
                 cls._store_fig(l_G, experiment_id)
                 cls._plot_list_of_GFigure(l_G,
@@ -89,9 +94,9 @@ class AbstractExperimentSet:
                               inspect=False):
 
         if inspect:
-            print("The GFigures are available as `l_G`.")
-            print("Press 'c' to continue, save, and plot. ")
-            print(
+            gsim_logger.info("The GFigures are available as `l_G`.")
+            gsim_logger.info("Press 'c' to continue, save, and plot. ")
+            gsim_logger.info(
                 "You can type `interact` to enter interactive mode and `Ctr D` to exit. "
             )
             set_trace()
@@ -125,7 +130,7 @@ class AbstractExperimentSet:
         f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
         l_G = cls._load_fig(f_name)
         if l_G is None:  # There is no data for this experiment.
-            print(
+            gsim_logger.error(
                 "The experiment %s does not exist or has not been run before."
                 % experiment_id)
         else:
@@ -150,7 +155,7 @@ class AbstractExperimentSet:
             os.mkdir(target_folder)
         file_name = cls._experiment_id_to_f_name(experiment_id) + ".pk"
 
-        print("Storing figure as %s" % target_folder + file_name)
+        gsim_logger.info("Storing figure as %s" % target_folder + file_name)
         pickle.dump(l_G, open(target_folder + file_name, "wb"))
 
     @classmethod
