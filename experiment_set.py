@@ -53,7 +53,7 @@ class AbstractExperimentSet:
             )
             l_G = getattr(cls, f_name)(l_args)
             end_time = datetime.now()
-            gsim_logger.info("Elapsed time = ",
+            gsim_logger.info("Elapsed time = " +
                              time_to_str(end_time - start_time))
 
             # Set l_G to be a (possibly empty) list of GFigure
