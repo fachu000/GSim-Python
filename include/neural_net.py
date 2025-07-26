@@ -379,16 +379,24 @@ class NeuralNet(nn.Module):
             num_examples_val = len(dataset_val)
         val = num_examples_val > 0
 
+        def custom_collate_fn(batch):
+            """ Custom collate function to handle the case when the dataset 
+            have different number of features and targets. """
+            return batch  # No stacking, just return the list
+
         dataloader_train = DataLoader(dataset_train,
                                       batch_size=batch_size,
-                                      shuffle=shuffle)
+                                      shuffle=shuffle,
+                                      collate_fn=custom_collate_fn)
         dataloader_train_eval = DataLoader(dataset_train,
                                            batch_size=batch_size_eval,
-                                           shuffle=shuffle)
+                                           shuffle=shuffle,
+                                           collate_fn=custom_collate_fn)
         if val:
             dataloader_val = DataLoader(dataset_val,
                                         batch_size=batch_size,
-                                        shuffle=shuffle)
+                                        shuffle=shuffle,
+                                        collate_fn=custom_collate_fn)
 
         d_hist = load_hist()
         l_loss_train_me = d_hist['train_loss_me']
