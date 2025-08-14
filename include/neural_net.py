@@ -380,7 +380,7 @@ class NeuralNet(nn.Module):
         val = num_examples_val > 0
 
         def custom_collate_fn(batch):
-            """ Custom collate function to handle the case when the dataset 
+            """ Custom collate function to handle the case when the dataset
             have different number of features and targets. """
             return batch  # No stacking, just return the list
 
