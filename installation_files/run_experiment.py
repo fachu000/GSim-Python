@@ -3,7 +3,6 @@
 
 import sys
 import os
-from IPython.core.debugger import set_trace
 import importlib
 from gsim import init_gsim_logger
 

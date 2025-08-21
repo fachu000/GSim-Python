@@ -1,4 +1,3 @@
-from IPython.core.debugger import set_trace
 from datetime import timedelta, datetime
 import matplotlib.pyplot as plt
 import logging
@@ -99,6 +98,7 @@ class AbstractExperimentSet:
             gsim_logger.info(
                 "You can type `interact` to enter interactive mode and `Ctr D` to exit. "
             )
+            from IPython.core.debugger import set_trace
             set_trace()
             cls._store_fig(l_G, experiment_id)
 

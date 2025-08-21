@@ -3,7 +3,6 @@ import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
-from IPython.core.debugger import set_trace
 
 title_to_caption = False
 default_figsize = None  # `None` lets plt choose
@@ -120,8 +119,7 @@ class Curve:
         # Input check
         if zaxis is None:
             # 2D plot
-            if type(yaxis) != list:
-                set_trace()
+            if type(yaxis) != list:                
                 raise TypeError("`yaxis` must be a list of numeric entries")
             if type(xaxis) == list:
                 assert len(xaxis) == len(yaxis)
