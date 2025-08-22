@@ -172,12 +172,20 @@ class NeuralNet(nn.Module):
     @property
     def weight_file_path(self):
         assert self.nn_folder is not None
-        return os.path.join(self.nn_folder, "weights.pth")
+        return self.get_weight_file_path(self.nn_folder)
 
     @property
     def hist_path(self):
         assert self.nn_folder is not None
         return os.path.join(self.nn_folder, "hist.pk")
+
+    @staticmethod
+    def get_weight_file_path(folder):
+        return os.path.join(folder, "weights.pth")
+
+    @staticmethod
+    def get_optimizer_state_file_path(folder):
+        return os.path.join(folder, "optimizer.pth")
 
     def load_weights_from_path(self, path):
         checkpoint = torch.load(path,
@@ -204,6 +212,7 @@ class NeuralNet(nn.Module):
             patience=None,
             lr_patience=None,
             lr_decay=.8,
+            restart_optimizer_when_reducing_lr=False,
             llc=LossLandscapeConfig()):
         """ 
         Args:
@@ -219,6 +228,14 @@ class NeuralNet(nn.Module):
           At most one of `val_split` and `dataset_val` can be provided. If one
           is provided, we say that `val` is True. 
 
+          `patience`: if provided and the validation loss does not improve its
+          minimum in this session for `patience` epochs, training will be
+          stopped.
+
+          `restart_optimizer_when_reducing_lr`: if True, the state of the
+          optimizer is reset to its state at the beginning of the session every
+          time the learning rate is reduced. 
+
         Returns a dict with keys and values given by:
          
           'train_loss_me': list of length num_epochs with the values of the
@@ -230,8 +247,8 @@ class NeuralNet(nn.Module):
           'train_loss': list of length num_epochs with the values of the
           training loss computed at the end of each epoch.
 
-          'val_loss': same as before but for the validation loss. Only if
-          `val` is true. 
+          'val_loss': same as before but for the validation loss. Only if `val`
+          is true. 
 
           'lr': list of length num_epochs with the learning rate at each epoch.
 
@@ -313,29 +330,44 @@ class NeuralNet(nn.Module):
                 temp_file_path = temp_file.name
             return temp_file_path
 
-        def get_weight_file_paths():
+        def get_temp_folder_path():
+            """Returns a temporary folder path."""
+            return tempfile.mkdtemp()
+
+        def get_train_val_state_folder_paths():
+            """
+            Returns the folders where the weights and optimizer state need to be
+            stored at the epochs with the best training loss and best validation
+            loss.
+
+                best_train_loss_folder, best_val_loss_folder
+            
+            """
 
             if self.nn_folder is None:
-                best_train_loss_file = get_temp_file_path()
-                best_val_loss_file = get_temp_file_path()
+                best_train_loss_folder = get_temp_folder_path()
+                best_val_loss_folder = get_temp_folder_path()
             else:
                 os.makedirs(self.nn_folder, exist_ok=True)
                 if val:
-                    best_train_loss_file = get_temp_file_path()
-                    best_val_loss_file = self.weight_file_path
+                    best_train_loss_folder = get_temp_folder_path()
+                    best_val_loss_folder = self.nn_folder
                 else:
-                    best_train_loss_file = self.weight_file_path
-                    best_val_loss_file = get_temp_file_path()
-            return best_train_loss_file, best_val_loss_file
+                    best_train_loss_folder = self.nn_folder
+                    best_val_loss_folder = get_temp_folder_path()
+            return best_train_loss_folder, best_val_loss_folder
 
         def save_optimizer_state(path):
             torch.save({"state": optimizer.state_dict()}, path)
 
         def load_optimizer_state(path):
-            checkpoint = torch.load(path,
-                                    weights_only=True,
-                                    map_location=self.device_type)
-            optimizer.load_state_dict(checkpoint["state"])
+            try:
+                checkpoint = torch.load(path,
+                                        weights_only=True,
+                                        map_location=self.device_type)
+                optimizer.load_state_dict(checkpoint["state"])
+            except Exception as e:
+                print(f"Optimizer state was not loaded from {path}: {e}")
 
         def decrease_lr(optimizer, lr_decay):
             """Resets the optimizer state and decreases the learning rate by a factor of `lr_decay`."""
@@ -345,7 +377,9 @@ class NeuralNet(nn.Module):
                 optimizer.param_groups[ind_group]["lr"]
                 for ind_group in range(len(optimizer.param_groups))
             ]
-            load_optimizer_state(initial_optimizer_state_file)
+            if restart_optimizer_when_reducing_lr:
+                load_optimizer_state(
+                    self.get_optimizer_state_file_path(self.nn_folder))
             for ind_group in range(len(optimizer.param_groups)):
                 optimizer.param_groups[ind_group][
                     "lr"] = l_lr[ind_group] * lr_decay
@@ -415,10 +449,17 @@ class NeuralNet(nn.Module):
         best_train_loss = torch.inf
         #num_epochs_left_to_expire_patience = patience
         num_epochs_left_to_expire_lr_patience = lr_patience
-        best_train_loss_file, best_val_loss_file = get_weight_file_paths()
+        best_train_loss_state_folder, best_val_loss_state_folder = get_train_val_state_folder_paths(
+        )
 
-        initial_optimizer_state_file = get_temp_file_path()
-        save_optimizer_state(initial_optimizer_state_file)
+        # Try to load the optimizer state if available in self.nn_folder
+        load_optimizer_state(self.get_optimizer_state_file_path(
+            self.nn_folder))
+        # If the previous step failed, we save the initial optimizer state so
+        # that we can reset the optimizer later. If the previous step succeeded,
+        # the file will remain the same.
+        save_optimizer_state(self.get_optimizer_state_file_path(
+            self.nn_folder))
 
         for ind_epoch in range(ind_epoch_start, ind_epoch_start + num_epochs):
             self.train()
@@ -431,7 +472,7 @@ class NeuralNet(nn.Module):
                                                   f_loss) if val else np.nan
 
             gsim_logger.info(
-                f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.2f}, train loss = {loss_train_this_epoch:.2f}, val loss = {loss_val_this_epoch:.2f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
+                f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.4f}, train loss = {loss_train_this_epoch:.4f}, val loss = {loss_val_this_epoch:.4f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
             )
 
             l_loss_train_me.append(loss_train_me_this_epoch)
@@ -442,27 +483,48 @@ class NeuralNet(nn.Module):
             ind_epoch_best_loss_val = np.argmin(
                 [v if not np.isnan(v) else np.inf for v in l_loss_val])
             if ind_epoch_best_loss_val == ind_epoch:
-                self.save_weights_to_path(best_val_loss_file)
+                self.save_weights_to_path(
+                    self.get_weight_file_path(best_val_loss_state_folder))
+                save_optimizer_state(
+                    self.get_optimizer_state_file_path(
+                        best_val_loss_state_folder))
 
             if patience:
-                if np.max([ind_epoch_best_loss_val, ind_epoch_start
-                           ]) + patience < ind_epoch:
+                ind_epoch_best_loss_val_this_session = np.argmin([
+                    v if not np.isnan(v) else np.inf
+                    for v in l_loss_val[ind_epoch_start:]
+                ]) + ind_epoch_start
+
+                if ind_epoch_best_loss_val_this_session + patience < ind_epoch:
                     gsim_logger.info("Patience expired.")
                     break
 
-            if lr_patience or val:
+            if lr_patience or not val:
                 # The weights should also be stored when val_split==0 since they
                 # need to be returned at the end.
                 if loss_train_this_epoch < best_train_loss:
+                    print(
+                        "------------------- Improving training loss.--------------------------"
+                    )
                     best_train_loss = loss_train_this_epoch
-                    self.save_weights_to_path(best_train_loss_file)
+                    self.save_weights_to_path(
+                        self.get_weight_file_path(
+                            best_train_loss_state_folder))
+                    save_optimizer_state(
+                        self.get_optimizer_state_file_path(
+                            best_train_loss_state_folder))
                     num_epochs_left_to_expire_lr_patience = lr_patience
                 else:
                     if lr_patience:
                         num_epochs_left_to_expire_lr_patience -= 1
                         if num_epochs_left_to_expire_lr_patience == 0:
+                            self.load_weights_from_path(
+                                self.get_weight_file_path(
+                                    best_train_loss_state_folder))
+                            load_optimizer_state(
+                                self.get_optimizer_state_file_path(
+                                    best_train_loss_state_folder))
                             decrease_lr(optimizer, lr_decay)
-                            self.load_weights_from_path(best_train_loss_file)
                             num_epochs_left_to_expire_lr_patience = lr_patience
 
             # Loss landscapes
@@ -483,11 +545,15 @@ class NeuralNet(nn.Module):
 
         if best_weights and num_epochs > 0:
             if val:
-                if os.path.exists(best_val_loss_file):
-                    self.load_weights_from_path(best_val_loss_file)
+                best_val_loss_weight_file = self.get_weight_file_path(
+                    best_val_loss_state_folder)
+                if os.path.exists(best_val_loss_weight_file):
+                    self.load_weights_from_path(best_val_loss_weight_file)
             else:
-                if os.path.exists(best_train_loss_file):
-                    self.load_weights_from_path(best_train_loss_file)
+                best_train_loss_weight_file = self.get_weight_file_path(
+                    best_train_loss_state_folder)
+                if os.path.exists(best_train_loss_weight_file):
+                    self.load_weights_from_path(best_train_loss_weight_file)
 
         return d_hist
 
