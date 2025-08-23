@@ -215,6 +215,16 @@ class NeuralNet(nn.Module):
             restart_optimizer_when_reducing_lr=False,
             llc=LossLandscapeConfig()):
         """ 
+        Starts a training session.
+
+        If 
+            - self.nn_folder exists
+
+            - self.nn_folder/optimizer.pth exists,
+        
+        this function will attempt to load this state into the optimizer. To
+        reset the optimizer state, just erase this file before invoking fit. 
+
         Args:
 
          `f_loss`: f_loss(pred,targets) where pred.shape[0] =
@@ -233,8 +243,10 @@ class NeuralNet(nn.Module):
           stopped.
 
           `restart_optimizer_when_reducing_lr`: if True, the state of the
-          optimizer is reset to its state at the beginning of the session every
-          time the learning rate is reduced. 
+          optimizer is reset to its state at the beginning of the session (the
+          one in self.nn_folder/optimizer.pth if this file exists and can be
+          loaded, or the state of a new optimizer otherwise) every time the
+          learning rate is reduced. This may help escape local minima.
 
         Returns a dict with keys and values given by:
          
@@ -378,8 +390,7 @@ class NeuralNet(nn.Module):
                 for ind_group in range(len(optimizer.param_groups))
             ]
             if restart_optimizer_when_reducing_lr:
-                load_optimizer_state(
-                    self.get_optimizer_state_file_path(self.nn_folder))
+                load_optimizer_state(initial_optimizer_state_file)
             for ind_group in range(len(optimizer.param_groups)):
                 optimizer.param_groups[ind_group][
                     "lr"] = l_lr[ind_group] * lr_decay
@@ -453,13 +464,16 @@ class NeuralNet(nn.Module):
         )
 
         # Try to load the optimizer state if available in self.nn_folder
-        load_optimizer_state(self.get_optimizer_state_file_path(
-            self.nn_folder))
-        # If the previous step failed, we save the initial optimizer state so
-        # that we can reset the optimizer later. If the previous step succeeded,
-        # the file will remain the same.
-        save_optimizer_state(self.get_optimizer_state_file_path(
-            self.nn_folder))
+        if self.nn_folder is not None:
+            load_optimizer_state(
+                self.get_optimizer_state_file_path(self.nn_folder))
+
+        if restart_optimizer_when_reducing_lr:
+            # Regardless of whether the optimizer state could not be loaded in
+            # the previous step, we save the initial optimizer state so that we
+            # can reset it later.
+            initial_optimizer_state_file = get_temp_file_path()
+            save_optimizer_state(initial_optimizer_state_file)
 
         for ind_epoch in range(ind_epoch_start, ind_epoch_start + num_epochs):
             self.train()
