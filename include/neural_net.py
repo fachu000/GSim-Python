@@ -93,6 +93,8 @@ class NeuralNet(nn.Module):
                     f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network will be initialized."
                 )
 
+        self.to(device=self.device_type)
+
     def _assert_initialized(self):
         assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
 
@@ -517,9 +519,6 @@ class NeuralNet(nn.Module):
                 # The weights should also be stored when val_split==0 since they
                 # need to be returned at the end.
                 if loss_train_this_epoch < best_train_loss:
-                    print(
-                        "------------------- Improving training loss.--------------------------"
-                    )
                     best_train_loss = loss_train_this_epoch
                     self.save_weights_to_path(
                         self.get_weight_file_path(
@@ -611,6 +610,9 @@ if __name__ == "__main__":
     from the root folder of the repository.
     
     """
+
+    from gsim import init_gsim_logger
+    init_gsim_logger()
 
     class MyDataset(Dataset):
 
