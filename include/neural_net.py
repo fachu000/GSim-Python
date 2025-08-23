@@ -47,6 +47,8 @@ class NeuralNet(nn.Module):
 
     _initialized = False
 
+    collate_fn = None
+
     def __init__(self, *args, nn_folder=None, device_type=None, **kwargs):
         """
         
@@ -439,14 +441,17 @@ class NeuralNet(nn.Module):
 
         dataloader_train = DataLoader(dataset_train,
                                       batch_size=batch_size,
-                                      shuffle=shuffle)
+                                      shuffle=shuffle,
+                                      collate_fn=self.collate_fn)
         dataloader_train_eval = DataLoader(dataset_train,
                                            batch_size=batch_size_eval,
-                                           shuffle=shuffle)
+                                           shuffle=shuffle,
+                                           collate_fn=self.collate_fn)
         if val:
             dataloader_val = DataLoader(dataset_val,
                                         batch_size=batch_size,
-                                        shuffle=shuffle)
+                                        shuffle=shuffle,
+                                        collate_fn=self.collate_fn)
 
         d_hist = load_hist()
         l_loss_train_me = d_hist['train_loss_me']
