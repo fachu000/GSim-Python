@@ -3,11 +3,14 @@
 
 import sys
 import os
-from IPython.core.debugger import set_trace
 import importlib
+from gsim import init_gsim_logger
+
+gsim_logger = init_gsim_logger()
 
 
 def initialize():
+
     if not os.path.exists("./gsim"):
         # If this behavior were changed, the output file storage functionality should be
         # modified accordingly.
@@ -15,6 +18,13 @@ def initialize():
             "Error: `run_experiment` must be invoked from the folder where it is defined"
         )
         quit()
+
+    # Add the parent directory (rme) to the Python path so that ml_estimation
+    # can be imported as a proper package with relative imports
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)  # This is the rme directory
+    if parent_dir not in sys.path:
+        sys.path.insert(0, parent_dir)
 
     sys.path.insert(1, './gsim/')
 
@@ -26,10 +36,13 @@ import gsim_conf
 
 
 def load_modules():
-    print("Loading modules...", end=' ')
-    module = importlib.import_module(gsim_conf.module_name)
+    gsim_logger.info("Loading modules...")
+    # Import the module with the proper package context so relative imports work
+    current_dir = os.path.basename(os.getcwd())
+    module_name_with_package = f"{current_dir}.{gsim_conf.module_name}"
+    module = importlib.import_module(module_name_with_package)
     ExperimentSet = getattr(module, "ExperimentSet")
-    print("done")
+    gsim_logger.info("Finished loading modules.")
     return ExperimentSet
 
 
