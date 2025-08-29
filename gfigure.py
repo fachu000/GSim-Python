@@ -119,7 +119,7 @@ class Curve:
         # Input check
         if zaxis is None:
             # 2D plot
-            if type(yaxis) != list:                
+            if type(yaxis) != list:
                 raise TypeError("`yaxis` must be a list of numeric entries")
             if type(xaxis) == list:
                 assert len(xaxis) == len(yaxis)
@@ -382,7 +382,7 @@ class Subplot:
             self.add_curve(**kwargs)
 
     def __repr__(self):
-        return f"<Subplot objet with title=\"{self.title}\", len(self.l_curves)={len(self.l_curves)} curves>"
+        return f"<Subplot object with title=\"{self.title}\", len(self.l_curves)={len(self.l_curves)} curves>"
 
     def is_empty(self):
 
@@ -927,12 +927,11 @@ class GFigure:
         # Create a subplot if the arguments specify one
         new_subplot = Subplot(*args, **kwargs)
         self.ind_active_subplot = ind_active_subplot
+        self.l_subplots: list["Subplot | None"] = []
         if not new_subplot.is_empty():
             # List of axes to create subplots
             self.l_subplots = [None] * (self.ind_active_subplot + 1)
             self.l_subplots[self.ind_active_subplot] = new_subplot
-        else:
-            self.l_subplots = []
 
         self.num_subplot_rows = num_subplot_rows
         self.num_subplot_columns = num_subplot_columns

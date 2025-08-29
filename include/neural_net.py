@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+from collections.abc import Sized
 import os
 import pickle
 import tempfile
@@ -5,8 +7,10 @@ import logging
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset, Subset, random_split
+from torch.utils.data import DataLoader, Dataset, Subset, random_split, default_collate
 from tqdm import tqdm
+
+from gsim.gfigure import Subplot
 
 try:
     from ...gsim import GFigure
@@ -14,6 +18,233 @@ except ImportError:
     from gsim import GFigure
 
 gsim_logger = logging.getLogger("gsim")
+
+
+class Normalizer(ABC):
+
+    def __init__(self, nn_folder: str | None = None):
+        self.nn_folder = nn_folder
+
+    @abstractmethod
+    def fit(self, dataset: Dataset):
+        pass
+
+    def save(self):
+        # To be overridden if necessary
+        pass
+
+    def load(self):
+        # To be overridden if necessary
+        pass
+
+    @property
+    def params_file(self):
+        if self.nn_folder is None:
+            return None
+        return os.path.join(self.nn_folder, "normalizer.pk")
+
+    @abstractmethod
+    def normalize_feats_batch(self, t_feats: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_feats`: batch_size x ... (feature tensor)
+
+        """
+        pass
+
+    @abstractmethod
+    def normalize_targets_batch(self, t_targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_targets`: batch_size x ... (target tensor)
+
+        """
+        pass
+
+    @abstractmethod
+    def unnormalize_targets_batch(self,
+                                  t_targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_targets`: batch_size x ... (target tensor)
+
+        """
+        pass
+
+    def normalize_example_batch(
+            self, l_batch: list[torch.Tensor]) -> list[torch.Tensor]:
+        """
+        In datasets formed of pairs (features, targets), batch is a
+        list of length 2. The first element of this list is a batch
+        of features, and the second element is a batch of targets.
+        """
+
+        t_feats, t_targets = l_batch
+        return [
+            self.normalize_feats_batch(t_feats),
+            self.normalize_targets_batch(t_targets)
+        ]
+
+
+class DefaultNormalizer(Normalizer):
+
+    def __init__(self, mode: str, **kwargs):
+        """
+        This normalizer is to be used with datasets of pairs (features, targets). 
+
+        This class separately normalizes each entry of the features and targets.
+        For example, if the features are an M x N matrix, then normalization
+        will subtract a mean M x N matrix obtained by averaging the feature
+        matrices in the dataset and will divide by the standard deviation M x N
+        matrix obtained likewise. 
+
+        Args:
+
+            `mode`: can be
+                - "none": no normalization
+                - "features": normalize only the features
+                - "targets": normalize only the targets
+                - "both": normalize both features and targets
+
+            `nn_folder`: if not None, the statistics of the normalization are
+            loaded from this folder. When training, the statistics are saved in
+            this folder.
+        
+        """
+
+        super().__init__(**kwargs)
+        assert mode in [
+            "features", "targets", "both"
+        ], 'mode must be one of "features", "targets", or "both".'
+        self.mode = mode
+
+        self.t_feats_mean = None  # same shape as the features
+        self.t_feats_std = None  # same shape as the features
+        self.t_targets_mean = None  # same shape as the targets
+        self.t_targets_std = None  # same shape as the targets
+
+    def save(self):
+        # To be overridden if necessary
+        if self.nn_folder is None:
+            return
+        d_params = {
+            "t_feats_mean": self.t_feats_mean,
+            "t_feats_std": self.t_feats_std,
+            "t_targets_mean": self.t_targets_mean,
+            "t_targets_std": self.t_targets_std
+        }
+
+        assert self.params_file is not None
+        with open(self.params_file, "wb") as f:
+            pickle.dump(d_params, f)
+
+    def load(self):
+        if self.nn_folder is None:
+            return
+        assert self.params_file is not None
+        with open(self.params_file, "rb") as f:
+            d_params = pickle.load(f)
+            self.t_feats_mean = d_params["t_feats_mean"]
+            self.t_feats_std = d_params["t_feats_std"]
+            self.t_targets_mean = d_params["t_targets_mean"]
+            self.t_targets_std = d_params["t_targets_std"]
+
+    def fit(self, dataset: Dataset):
+
+        assert isinstance(dataset, Dataset)
+
+        # Type check to ensure dataset has __len__ method
+        if not hasattr(dataset, "__len__"):
+            raise NotImplementedError("Dataset must implement __len__ method")
+
+        num_examples = len(dataset)  # type: ignore
+        assert num_examples > 0
+
+        # Check that the dataset contains pairs t_input, t_target
+        example = dataset[0]
+        if not (isinstance(example, (tuple, list)) and len(example) == 2):
+            raise NotImplementedError(
+                "Dataset must return pairs (t_input, t_target) when indexed.")
+
+        # Initializations
+        t_feats, t_targets = example
+        if self.mode in ["features", "both"]:
+            self.t_feats_mean = torch.zeros_like(t_feats)
+        if self.mode in ["targets", "both"]:
+            self.t_targets_mean = torch.zeros_like(t_targets)
+        t_features_var = torch.zeros_like(t_feats)
+        t_targets_var = torch.zeros_like(t_targets)
+
+        with torch.no_grad():
+            # Estimate the mean matrices
+            for ind_example in range(num_examples):
+                t_feats, t_targets = dataset[ind_example]
+                if self.mode in ["features", "both"]:
+                    self.t_feats_mean += t_feats / num_examples
+                if self.mode in ["targets", "both"]:
+                    self.t_targets_mean += t_targets / num_examples
+
+            # Estimate the standard deviation matrices
+            for ind_example in range(num_examples):
+                t_feats, t_targets = dataset[ind_example]
+                if self.mode in ["features", "both"]:
+                    t_features_var += (t_feats -
+                                       self.t_feats_mean)**2 / num_examples
+                if self.mode in ["targets", "both"]:
+                    t_targets_var += (t_targets -
+                                      self.t_targets_mean)**2 / num_examples
+
+            if self.mode in ["features", "both"]:
+                self.t_feats_std = torch.sqrt(t_features_var)
+                # Avoid division by zero
+                self.t_feats_std[self.t_feats_std == 0] = 1.0
+            if self.mode in ["targets", "both"]:
+                self.t_targets_std = torch.sqrt(t_targets_var)
+                # Avoid division by zero
+                self.t_targets_std[self.t_targets_std == 0] = 1.0
+
+    def normalize_feats_batch(self, t_feats: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_feats`: shape (batch_size, *feats_shape)
+
+        """
+        if self.mode in ["features", "both"]:
+            assert self.t_feats_mean is not None and self.t_feats_std is not None, "The normalizer has not been fitted or loaded from a file."
+            return (t_feats -
+                    self.t_feats_mean[None, ...]) / self.t_feats_std[None, ...]
+        return t_feats
+
+    def normalize_targets_batch(self, t_targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_targets`: shape (batch_size, *targets_shape)
+
+        """
+        if self.mode in ["targets", "both"]:
+            assert self.t_targets_mean is not None and self.t_targets_std is not None, "The normalizer has not been fitted or loaded from a file."
+            return (t_targets - self.t_targets_mean[None, ...]
+                    ) / self.t_targets_std[None, ...]
+        return t_targets
+
+    def unnormalize_targets_batch(self,
+                                  t_targets: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_targets`: shape (batch_size, *targets_shape)
+
+        """
+        if self.mode in ["targets", "both"]:
+            assert self.t_targets_mean is not None and self.t_targets_std is not None, "The normalizer has not been fitted or loaded from a file."
+            return t_targets.to("cpu") * self.t_targets_std[
+                None, ...] + self.t_targets_mean[None, ...]
+        return t_targets
 
 
 class LossLandscapeConfig():
@@ -47,9 +278,12 @@ class NeuralNet(nn.Module):
 
     _initialized = False
 
-    collate_fn = None
-
-    def __init__(self, *args, nn_folder=None, device_type=None, **kwargs):
+    def __init__(self,
+                 *args,
+                 nn_folder=None,
+                 normalizer=None,
+                 device_type=None,
+                 **kwargs):
         """
         
         Args: 
@@ -60,7 +294,16 @@ class NeuralNet(nn.Module):
             together with training metrics. If validation data is not provided,
             the weights that minimize the training loss are saved.
         
-        
+            `normalizer`: can be
+                - None: no normalization
+                - "features": normalize only the features
+                - "targets": normalize only the targets
+                - "both": normalize both features and targets            
+                - an instance of Normalizer: use the provided normalizer
+            The options "features", "targets", and "both" can be selected only
+            when the dataset comprises pairs of (features, targets). For other
+            dataset forms, writing a custom Normalizer is required. 
+
         """
 
         super().__init__(*args, **kwargs)
@@ -82,6 +325,17 @@ class NeuralNet(nn.Module):
             )
         self.nn_folder = nn_folder
 
+        # Set the normalizer to None or to an instance of Normalizer
+        if normalizer is None:
+            self.normalizer = None
+        elif isinstance(normalizer, str):
+            self.normalizer = DefaultNormalizer(mode=normalizer,
+                                                nn_folder=self.nn_folder)
+        elif isinstance(normalizer, Normalizer):
+            self.normalizer = normalizer
+        else:
+            raise ValueError("Invalid normalizer type.")
+
     def initialize(self):
         self._initialized = True
 
@@ -90,6 +344,11 @@ class NeuralNet(nn.Module):
                 self.load_weights_from_path(self.weight_file_path)
                 gsim_logger.info(
                     f"Weights loaded from {self.weight_file_path}")
+                if self.normalizer is not None:
+                    normalizer = self.normalizer
+                    normalizer.load()
+                    gsim_logger.info(
+                        f"Normalizer loaded from {normalizer.params_file}")
             else:
                 gsim_logger.warning(
                     f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network will be initialized."
@@ -100,7 +359,39 @@ class NeuralNet(nn.Module):
     def _assert_initialized(self):
         assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
 
-    def _get_loss(self, data, f_loss):
+    @staticmethod
+    def collate_fn(*args, **kwargs):
+        # Override if needed
+        return default_collate(*args, **kwargs)
+
+    def normalize(self, example):
+        # Override if needed
+        return example
+
+    def collate_and_normalize(self, l_batch):
+        # l_batch is typ. a list of batch_size pairs (features, targets)
+        l_batch = self.collate_fn(l_batch)
+        # After collation, l_batch is typ. a list of tensors (feats_batch, targets_batch)
+        if self.normalizer is not None:
+            l_batch = self.normalizer.normalize_example_batch(l_batch)
+        return l_batch
+
+    def make_unnormalized_loss(self, f_loss):
+        normalizer = self.normalizer
+        assert normalizer is not None
+        return lambda pred, target: f_loss(
+            normalizer.unnormalize_targets_batch(pred),
+            normalizer.unnormalize_targets_batch(target),
+        )
+
+    def _get_loss(self, data, f_loss, unnormalize=False):
+        """
+        If `unnormalize` is True, the unnormalized loss is returned. This is just
+        the result of f_loss(unnormalize(self(feats)),unnormalize(targets)).
+        """
+        if unnormalize:
+            raise NotImplementedError()
+
         assert f_loss is not None, "f_loss must be provided unless you override _get_loss."
         m_feat_batch, v_targets_batch = data
         m_feat_batch = m_feat_batch.float().to(self.device_type)
@@ -141,37 +432,64 @@ class NeuralNet(nn.Module):
 
             l_loss_this_epoch.append(loss.detach())
 
-        return torch.cat(l_loss_this_epoch).mean().cpu().numpy() if len(
+        return float(torch.cat(l_loss_this_epoch).mean().cpu().numpy()) if len(
             l_loss_this_epoch) else np.nan
 
-    def evaluate(self, dataset, batch_size, f_loss):
+    def evaluate(self, dataset, batch_size, f_loss, unnormalized=True):
         """
+        Args:
+
+            `unnormalized`: If True, the unnormalized loss is returned. If no
+            Normalizer is set, then the loss is already unnormalized.
+
         Returns a dict with key-values:
 
         "loss": the result of averaging `f_loss` across `dataset`.
         """
         self._assert_initialized()
 
-        dataloader = DataLoader(dataset, batch_size=batch_size)
+        if not unnormalized and self.normalizer is None:
+            raise ValueError(
+                "Cannot return normalized loss if a normalizer is not set.")
+
+        if unnormalized and self.normalizer is not None:
+            f_loss = self.make_unnormalized_loss(f_loss)
+
+        dataloader = self.make_data_loader(dataset, batch_size)
         self.eval()
         loss = self._run_epoch(dataloader, f_loss=f_loss)
         return {"loss": loss}
 
-    def predict(self, dataset, batch_size=32):
+    def predict(self, dataset, batch_size=32, unnormalize=True):
         """
+        [WIP] This function has not been tested when there is normalization. We
+        can extend it so that it can take also a tensor as input. 
+
         Returns a tensor with the result of performing a forward pass on the
         points in `dataset`. 
+        
+        If `unnormalize` is True, the unnormalized predictions are returned.
+
         """
         self._assert_initialized()
 
-        dataloader = DataLoader(dataset, batch_size=batch_size)
+        if not unnormalize and self.normalizer is None:
+            raise ValueError(
+                "Cannot return normalized predictions if a normalizer is not set."
+            )
+
+        dataloader = self.make_data_loader(dataset, batch_size=batch_size)
         l_out = []
         self.eval()
         for m_feat_batch, _ in dataloader:
-            m_targets_batch_pred = self(m_feat_batch.float())
-            l_out.append(m_targets_batch_pred.detach().numpy())
+            m_targets_batch_pred = self(m_feat_batch.float().to(
+                self.device_type)).detach().cpu()
+            if unnormalize and self.normalizer is not None:
+                m_targets_batch_pred = self.normalizer.unnormalize_targets_batch(
+                    m_targets_batch_pred)
+            l_out.append(m_targets_batch_pred)
 
-        return np.concatenate(l_out, axis=0)
+        return torch.concat(l_out, dim=0)
 
     @property
     def weight_file_path(self):
@@ -202,6 +520,12 @@ class NeuralNet(nn.Module):
     def save_weights_to_path(self, path):
         torch.save({"weights": self.state_dict()}, path)
 
+    def make_data_loader(self, dataset, batch_size, shuffle=None):
+        return DataLoader(dataset,
+                          batch_size=batch_size,
+                          shuffle=shuffle,
+                          collate_fn=self.collate_and_normalize)
+
     def fit(self,
             dataset: Dataset,
             optimizer,
@@ -217,6 +541,7 @@ class NeuralNet(nn.Module):
             lr_patience=None,
             lr_decay=.8,
             restart_optimizer_when_reducing_lr=False,
+            eval_unnormalized_loss=False,
             llc=LossLandscapeConfig()):
         """ 
         Starts a training session.
@@ -269,6 +594,21 @@ class NeuralNet(nn.Module):
           'lr': list of length num_epochs with the learning rate at each epoch.
 
           'l_loss_landscapes': list of figures with loss landscapes.
+                      
+           'unnormalized_train_loss': list of length num_epochs with the values
+           of the training loss computed at the end of each epoch after
+           unnormalizing the targets and the predictions. These values are only
+           computed if `eval_unnormalized_loss` is True; else they are np.nan.
+
+           'unnormalized_val_loss': list of length num_epochs with the values of
+           the validation loss computed at the end of each epoch after
+           unnormalizing the targets and the predictions. Only if `val` is True.
+           These values are only computed if `eval_unnormalized_loss` is True;
+           else they are np.nan.
+
+         These losses are just informative, the network is trained on the
+         normalized loss if a normalizer that normalizes the targets is
+         specified in the constructor. 
 
         If `best_weights` is False, then the weights of the network at the end
         of the execution of this function equal the weights at the last epoch.
@@ -383,7 +723,9 @@ class NeuralNet(nn.Module):
                                         map_location=self.device_type)
                 optimizer.load_state_dict(checkpoint["state"])
             except Exception as e:
-                print(f"Optimizer state was not loaded from {path}: {e}")
+                gsim_logger.warning(
+                    f"Optimizer state was not loaded from {path}. Using default initialization."
+                )
 
         def decrease_lr(optimizer, lr_decay):
             """Resets the optimizer state and decreases the learning rate by a factor of `lr_decay`."""
@@ -407,6 +749,15 @@ class NeuralNet(nn.Module):
         def load_hist():
             if self.nn_folder is not None and os.path.exists(self.hist_path):
                 d_hist = pickle.load(open(self.hist_path, "rb"))
+
+                # Backwards compatibility: populate the unnormalized loss if needed
+                if "unnormalized_loss_train" not in d_hist:
+                    d_hist["unnormalized_loss_train"] = [np.nan] * len(
+                        d_hist["train_loss"])
+                if "unnormalized_loss_val" not in d_hist:
+                    d_hist["unnormalized_loss_val"] = [np.nan] * len(
+                        d_hist["val_loss"])
+
             else:
                 d_hist = {
                     'train_loss_me': [],
@@ -414,21 +765,42 @@ class NeuralNet(nn.Module):
                     'val_loss': [],
                     "lr": [],
                     "l_loss_landscapes": [],
-                    "ind_epoch": 0
+                    "ind_epoch": 0,
+                    "unnormalized_loss_train": [],
+                    "unnormalized_loss_val": [],
                 }
             return d_hist
+
+        def compute_unnormalized_losses(dataloader_train_eval, dataloader_val,
+                                        f_loss):
+
+            if self.normalizer is None or not eval_unnormalized_loss:
+                unnormalized_loss_train_this_epoch = np.nan
+                unnormalized_loss_val_this_epoch = np.nan
+            else:
+                self.train()
+                unnormalized_loss_train_this_epoch = self._run_epoch(
+                    dataloader_train_eval, self.make_unnormalized_loss(f_loss))
+
+                self.eval()
+                unnormalized_loss_val_this_epoch = self._run_epoch(
+                    dataloader_val, self.make_unnormalized_loss(
+                        f_loss)) if dataloader_val else np.nan
+
+            l_unnormalized_loss_train.append(
+                unnormalized_loss_train_this_epoch)
+            l_unnormalized_loss_val.append(unnormalized_loss_val_this_epoch)
 
         self._assert_initialized()
         torch.cuda.empty_cache()
 
         batch_size_eval = batch_size_eval if batch_size_eval else batch_size
 
-        self.to(device=self.device_type)
-
         assert val_split == 0.0 or dataset_val is None
         if dataset_val is None:
             # The data is deterministically split into training and validation
             # sets so that we can resume training.
+            assert isinstance(dataset, Sized)
             num_examples_val = int(val_split * len(dataset))
             dataset_train = Subset(dataset,
                                    range(len(dataset) - num_examples_val))
@@ -439,19 +811,18 @@ class NeuralNet(nn.Module):
             num_examples_val = len(dataset_val)
         val = num_examples_val > 0
 
-        dataloader_train = DataLoader(dataset_train,
-                                      batch_size=batch_size,
-                                      shuffle=shuffle,
-                                      collate_fn=self.collate_fn)
-        dataloader_train_eval = DataLoader(dataset_train,
-                                           batch_size=batch_size_eval,
-                                           shuffle=shuffle,
-                                           collate_fn=self.collate_fn)
-        if val:
-            dataloader_val = DataLoader(dataset_val,
-                                        batch_size=batch_size,
-                                        shuffle=shuffle,
-                                        collate_fn=self.collate_fn)
+        # Fit the normalizer
+        if self.normalizer is not None:
+            self.normalizer.fit(dataset_train)
+            self.normalizer.save()
+
+        # Instantiate the data loaders
+        dataloader_train = self.make_data_loader(dataset_train, batch_size,
+                                                 shuffle)
+        dataloader_train_eval = self.make_data_loader(dataset_train,
+                                                      batch_size_eval, shuffle)
+        dataloader_val = self.make_data_loader(dataset_val, batch_size,
+                                               shuffle) if val else None
 
         d_hist = load_hist()
         l_loss_train_me = d_hist['train_loss_me']
@@ -460,6 +831,8 @@ class NeuralNet(nn.Module):
         l_lr = d_hist['lr']
         l_llplots = d_hist['l_loss_landscapes']  # loss landscape plots
         ind_epoch_start = d_hist['ind_epoch']
+        l_unnormalized_loss_train = d_hist['unnormalized_loss_train']
+        l_unnormalized_loss_val = d_hist['unnormalized_loss_val']
 
         llp_weight_file = get_temp_file_path(
         )  # file to restore the weights when the loss landscape needs to be plotted
@@ -489,8 +862,11 @@ class NeuralNet(nn.Module):
             loss_train_this_epoch = self._run_epoch(dataloader_train_eval,
                                                     f_loss)
             self.eval()
-            loss_val_this_epoch = self._run_epoch(dataloader_val,
-                                                  f_loss) if val else np.nan
+            loss_val_this_epoch = self._run_epoch(
+                dataloader_val, f_loss) if dataloader_val else np.nan
+
+            compute_unnormalized_losses(dataloader_train_eval, dataloader_val,
+                                        f_loss)
 
             gsim_logger.info(
                 f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.4f}, train loss = {loss_train_this_epoch:.4f}, val loss = {loss_val_this_epoch:.4f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
@@ -557,7 +933,9 @@ class NeuralNet(nn.Module):
                 'val_loss': l_loss_val,
                 "lr": l_lr,
                 "l_loss_landscapes": l_llplots,
-                "ind_epoch": ind_epoch
+                "ind_epoch": ind_epoch,
+                "unnormalized_loss_train": l_unnormalized_loss_train,
+                "unnormalized_loss_val": l_unnormalized_loss_val,
             }
             save_hist(d_hist)
 
@@ -576,30 +954,59 @@ class NeuralNet(nn.Module):
         return d_hist
 
     @staticmethod
-    def plot_training_history(d_metrics_train, first_epoch_to_plot=0):
-        G = GFigure()
-        max_y_value = -np.inf
-        min_y_value = np.inf
-        G.next_subplot(xlabel="Epoch",
-                       ylabel="Loss",
-                       xlim=(first_epoch_to_plot, None))
-        for key in d_metrics_train.keys():
-            if key not in ["lr", "l_loss_landscapes", "ind_epoch"]:
-                G.add_curve(yaxis=d_metrics_train[key], legend=key)
-                if len(d_metrics_train[key]) > first_epoch_to_plot:
-                    max_y_value = max(
-                        max_y_value,
-                        np.max(d_metrics_train[key][first_epoch_to_plot:]))
-                    min_y_value = min(
-                        min_y_value,
-                        np.min(d_metrics_train[key][first_epoch_to_plot:]))
-        if max_y_value != -np.inf and min_y_value != np.inf:
-            margin = 0.1 * (max_y_value - min_y_value)
-            G.l_subplots[-1].ylim = (min_y_value - margin,
-                                     max_y_value + margin)
-        G.next_subplot(xlabel="Epoch", ylabel="Learning rate", sharex=True)
-        G.add_curve(yaxis=d_metrics_train["lr"], legend="Learning rate")
-        return [G] + d_metrics_train["l_loss_landscapes"]
+    def plot_training_history(d_hist, first_epoch_to_plot=0):
+
+        def plot_keys(l_keys, margin_coef=0.1):
+            max_y_value = -np.inf
+            min_y_value = np.inf
+            s1 = Subplot(xlabel="Epoch",
+                         ylabel="Loss",
+                         xlim=(first_epoch_to_plot, None))
+            for key in l_keys:
+                s1.add_curve(yaxis=d_hist[key], legend=key)
+                if len(d_hist[key]) > first_epoch_to_plot:
+                    l_vals = d_hist[key][first_epoch_to_plot:]
+                    if not all(np.isnan(l_vals)):
+                        max_y_value = max(max_y_value, np.nanmax(l_vals))
+                        min_y_value = min(min_y_value, np.nanmin(l_vals))
+            if max_y_value != -np.inf and min_y_value != np.inf:
+                margin = margin_coef * (max_y_value - min_y_value)
+                s1.ylim = (min_y_value - margin, max_y_value + margin)
+            return s1
+
+        def plot_loss_and_learning_rate():
+            s1 = plot_keys(["train_loss_me", "train_loss", "val_loss"])
+            s2 = Subplot(xlabel="Epoch", ylabel="Learning rate", sharex=True)
+            s2.add_curve(yaxis=d_hist["lr"], legend="Learning rate")
+            G = GFigure()
+            G.l_subplots = [s1, s2]
+            return G
+
+        def plot_unnormalized_loss():
+            l_keys = ["unnormalized_loss_train", "unnormalized_loss_val"]
+            l_keys_to_plot = []
+            for key in l_keys:
+                l_vals = d_hist[key]
+                if not all(np.isnan(l_vals)):
+                    l_keys_to_plot.append(key)
+            if not len(l_keys_to_plot):
+                return None
+            G = GFigure()
+            G.l_subplots = [plot_keys(l_keys)]
+            return G
+
+        l_G = []
+
+        G1 = plot_loss_and_learning_rate()
+        l_G.append(G1)
+
+        G2 = plot_unnormalized_loss()
+        if G2 is not None:
+            l_G.append(G2)
+
+        l_G += d_hist["l_loss_landscapes"]
+
+        return l_G
 
     def print_num_parameters(self):
         total_params = sum(p.numel() for p in self.parameters())
