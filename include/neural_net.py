@@ -4,6 +4,7 @@ import os
 import pickle
 import tempfile
 import logging
+from typing import Union
 import numpy as np
 import torch
 from torch import nn
@@ -281,8 +282,8 @@ class NeuralNet(nn.Module):
     def __init__(self,
                  *args,
                  nn_folder=None,
-                 normalizer=None,
-                 device_type=None,
+                 normalizer: Union[None, Normalizer, str] = None,
+                 device_type: Union[None, str] = None,
                  **kwargs):
         """
         
@@ -384,25 +385,38 @@ class NeuralNet(nn.Module):
             normalizer.unnormalize_targets_batch(target),
         )
 
-    def _get_loss(self, data, f_loss, unnormalize=False):
+    def _get_loss(self, data, f_loss):
         """
-        If `unnormalize` is True, the unnormalized loss is returned. This is just
-        the result of f_loss(unnormalize(self(feats)),unnormalize(targets)).
+        Args:
+
+            `data`: typ. a tuple of two elements. The first is a list of
+            batch_size features and the second a list of batch_size targets. 
+
+        If `unnormalize` is True, the unnormalized loss is returned. This is
+        just the result of
+        f_loss(unnormalize(self(feats)),unnormalize(targets)).
         """
-        if unnormalize:
-            raise NotImplementedError()
+
+        def move_to_device(obj: Union[torch.Tensor, list, tuple]):
+            if isinstance(obj, torch.Tensor):
+                return obj.float().to(self.device_type)
+            elif isinstance(obj, (list, tuple)):
+                return type(obj)(move_to_device(item) for item in obj)
+            else:
+                raise TypeError("Unsupported type.")
 
         assert f_loss is not None, "f_loss must be provided unless you override _get_loss."
-        m_feat_batch, v_targets_batch = data
-        m_feat_batch = m_feat_batch.float().to(self.device_type)
-        v_targets_batch = v_targets_batch.float().to(self.device_type)
+        feat_batch, targets_batch = data
+        feat_batch = move_to_device(feat_batch)
+        targets_batch = move_to_device(targets_batch)
 
-        v_targets_batch_pred = self(m_feat_batch.float())
+        v_targets_batch_pred = self(feat_batch)
         #assert v_targets_batch_pred.shape == v_targets_batch.shape
-        loss = f_loss(v_targets_batch_pred.float(), v_targets_batch.float())
+        loss = f_loss(v_targets_batch_pred, targets_batch)
 
-        assert loss.shape[0] == m_feat_batch.shape[
-            0] and loss.ndim == 1, "f_loss must return a vector of length batch_size."
+        if isinstance(targets_batch, torch.Tensor):
+            assert loss.shape[0] == targets_batch.shape[
+                0] and loss.ndim == 1, "f_loss must return a vector of length batch_size."
         return loss
 
     def _run_epoch(self, dataloader, f_loss, optimizer=None):
@@ -422,13 +436,15 @@ class NeuralNet(nn.Module):
         for data in iterator:
 
             if optimizer:
-                loss = self._get_loss(data, f_loss)
+                loss = self._get_loss(data,
+                                      f_loss)  # vector of length batch_size
                 torch.mean(loss).backward()
                 optimizer.step()
                 optimizer.zero_grad()
             else:
                 with torch.no_grad():
-                    loss = self._get_loss(data, f_loss)
+                    loss = self._get_loss(
+                        data, f_loss)  # vector of length batch_size
 
             l_loss_this_epoch.append(loss.detach())
 
