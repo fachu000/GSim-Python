@@ -68,6 +68,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         print(d_metrics)
         return net.plot_training_history(d_training_history)
 
+    # WIP: set the parameters and target function properly.
     # Experiment that illustrates how to use normalization with NeuralNet
     def experiment_1002(l_args):
 
@@ -119,31 +120,40 @@ class ExperimentSet(gsim.AbstractExperimentSet):
 
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
-                self.fc1 = nn.Linear(20, 50)
-                self.fc2 = nn.Linear(50, 1)
+                self.fc1 = nn.Linear(20, 100)
+                self.fc2 = nn.Linear(100, 100)
+                self.fc3 = nn.Linear(100, 1)
                 self.initialize()
 
             def forward(self, x):
                 x = self.fc1(x)
                 x = torch.relu(x)
                 x = self.fc2(x)
+                x = torch.relu(x)
+                x = self.fc3(x)
                 return x
 
         torch.manual_seed(0)
         np.random.seed(0)
 
-        dataset = MyDataset(1000)
+        dataset = MyDataset(10000)
+
+        num_epochs = 50
 
         d_unnormalized = {
             "name": "Unnormalized network",
             "model": MyNet(),
-            "lr": 0.01
+            "lr": 0.01,
+            "weight_decay": 0,
+            "num_epochs": num_epochs
         }
 
         d_normalized = {
             "name": "Normalized network",
             "model": MyNet(normalizer="both"),
-            "lr": 0.5
+            "lr": 5e-3,  #0.5
+            "weight_decay": 1,
+            "num_epochs": num_epochs
         }
 
         l_nets = [d_unnormalized, d_normalized]
@@ -155,14 +165,16 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         for d_net in l_nets:
             print(f"Training {d_net['name']}")
             net: NeuralNet = d_net["model"]
-            optimizer = torch.optim.Adam(net.parameters(), lr=d_net["lr"])
+            optimizer = torch.optim.AdamW(net.parameters(),
+                                          lr=d_net["lr"],
+                                          weight_decay=d_net["weight_decay"])
 
             d_training_history = net.fit(
                 dataset,
                 optimizer,
                 val_split=0.2,
                 lr_patience=20,
-                num_epochs=200,
+                num_epochs=d_net["num_epochs"],
                 batch_size=200,
                 f_loss=f_loss,
                 eval_unnormalized_loss=True,
@@ -170,6 +182,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             d_net["metrics"] = net.evaluate(dataset,
                                             batch_size=32,
                                             f_loss=f_loss)
+            d_net["history"] = d_training_history
 
             l_G_now: list[GFigure] = net.plot_training_history(
                 d_training_history)
@@ -185,6 +198,34 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         for d_net in l_nets:
             print(f"Metrics for {d_net['name']}:")
             print(d_net["metrics"])
+
+        # Compare the losses of both networks
+        first_epoch_to_plot = np.minimum(8, num_epochs)
+        G = GFigure(xlabel="Epoch", ylabel="Loss")
+        G.add_curve(
+            xaxis=np.arange(first_epoch_to_plot, num_epochs),
+            yaxis=l_nets[0]["history"]["train_loss"][first_epoch_to_plot:],
+            legend=f"Unnormalized training loss of {l_nets[0]['name']}",
+            styles="b-")
+        G.add_curve(
+            xaxis=np.arange(first_epoch_to_plot, num_epochs),
+            yaxis=l_nets[0]["history"]["val_loss"][first_epoch_to_plot:],
+            legend=f"Unnormalized validation loss of {l_nets[0]['name']}",
+            styles="b--")
+        G.next_subplot(xlabel="Epoch", ylabel="Loss")
+        G.add_curve(
+            xaxis=np.arange(first_epoch_to_plot, num_epochs),
+            yaxis=l_nets[1]["history"]["unnormalized_train_loss"]
+            [first_epoch_to_plot:],
+            legend=f"Unnormalized training loss of {l_nets[1]['name']}",
+            styles="r-")
+        G.add_curve(
+            xaxis=np.arange(first_epoch_to_plot, num_epochs),
+            yaxis=l_nets[1]["history"]["unnormalized_val_loss"]
+            [first_epoch_to_plot:],
+            legend=f"Unnormalized validation loss of {l_nets[1]['name']}",
+            styles="r--")
+        l_G += [G]
         return l_G
 
     # Simple experiment where a neural network is trained to learn a 1D

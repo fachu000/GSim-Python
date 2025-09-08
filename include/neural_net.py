@@ -24,6 +24,26 @@ gsim_logger = logging.getLogger("gsim")
 class Normalizer(ABC):
 
     def __init__(self, nn_folder: str | None = None):
+        """        
+                           ┌───┐      ┌─────────┐  predictions  ┌──────┐
+           ┌-> features -> │ 1 │ ---> | forward | ---┬--------->| loss |-----> normalized loss
+           |               └───┘      └─────────┘    |    ┌─--->|      | 
+           |                                         |    |     └──────┘
+        Dataset                                      |    |
+           |                                         |    |     ┌───┐    
+           |                                         └--------->| 3 |---┐   ┌──────┐
+           |                                              |     └───┘   └-->|      |
+           |                            ┌───┐             |                 | loss |---> unnormalized loss
+           └-> targets  ----------------| 2 |-------------|     ┌───┐   ┌─->|      |
+                                        └───┘             └-----| 4 |---┘   └──────┘
+                                                                └───┘
+        1. normalize_feats_batch      |
+        2. normalize_targets_batch    | -> NeuralNet.collate_fn
+        
+        3. unnormalize_preds_batch    |
+        4. unnormalize_targets_batch  | -> NeuralNet.make_unnormalized_loss
+
+        """
         self.nn_folder = nn_folder
 
     @abstractmethod
@@ -71,6 +91,16 @@ class Normalizer(ABC):
         Args:
 
             `t_targets`: batch_size x ... (target tensor)
+
+        """
+        pass
+
+    @abstractmethod
+    def unnormalize_preds_batch(self, t_preds: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_preds`: batch_size x ... (predictions tensor)
 
         """
         pass
@@ -139,8 +169,9 @@ class DefaultNormalizer(Normalizer):
         }
 
         assert self.params_file is not None
-        with open(self.params_file, "wb") as f:
-            pickle.dump(d_params, f)
+        if os.path.exists(self.nn_folder):
+            with open(self.params_file, "wb") as f:
+                pickle.dump(d_params, f)
 
     def load(self):
         if self.nn_folder is None:
@@ -247,6 +278,15 @@ class DefaultNormalizer(Normalizer):
                 None, ...] + self.t_targets_mean[None, ...]
         return t_targets
 
+    def unnormalize_preds_batch(self, t_preds: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_preds`: shape (batch_size, *targets_shape)
+
+        """
+        return self.unnormalize_targets_batch(t_preds)
+
 
 class LossLandscapeConfig():
 
@@ -341,6 +381,9 @@ class NeuralNet(nn.Module):
         self._initialized = True
 
         if self.nn_folder is not None:
+            # Create the folder if it does not exist
+            os.makedirs(self.nn_folder, exist_ok=True)
+
             if os.path.exists(self.weight_file_path):
                 self.load_weights_from_path(self.weight_file_path)
                 gsim_logger.info(
@@ -381,7 +424,7 @@ class NeuralNet(nn.Module):
         normalizer = self.normalizer
         assert normalizer is not None
         return lambda pred, target: f_loss(
-            normalizer.unnormalize_targets_batch(pred),
+            normalizer.unnormalize_preds_batch(pred),
             normalizer.unnormalize_targets_batch(target),
         )
 
@@ -767,11 +810,11 @@ class NeuralNet(nn.Module):
                 d_hist = pickle.load(open(self.hist_path, "rb"))
 
                 # Backwards compatibility: populate the unnormalized loss if needed
-                if "unnormalized_loss_train" not in d_hist:
-                    d_hist["unnormalized_loss_train"] = [np.nan] * len(
+                if "unnormalized_train_loss" not in d_hist:
+                    d_hist["unnormalized_train_loss"] = [np.nan] * len(
                         d_hist["train_loss"])
-                if "unnormalized_loss_val" not in d_hist:
-                    d_hist["unnormalized_loss_val"] = [np.nan] * len(
+                if "unnormalized_val_loss" not in d_hist:
+                    d_hist["unnormalized_val_loss"] = [np.nan] * len(
                         d_hist["val_loss"])
 
             else:
@@ -782,8 +825,8 @@ class NeuralNet(nn.Module):
                     "lr": [],
                     "l_loss_landscapes": [],
                     "ind_epoch": 0,
-                    "unnormalized_loss_train": [],
-                    "unnormalized_loss_val": [],
+                    "unnormalized_train_loss": [],
+                    "unnormalized_val_loss": [],
                 }
             return d_hist
 
@@ -847,8 +890,8 @@ class NeuralNet(nn.Module):
         l_lr = d_hist['lr']
         l_llplots = d_hist['l_loss_landscapes']  # loss landscape plots
         ind_epoch_start = d_hist['ind_epoch']
-        l_unnormalized_loss_train = d_hist['unnormalized_loss_train']
-        l_unnormalized_loss_val = d_hist['unnormalized_loss_val']
+        l_unnormalized_loss_train = d_hist['unnormalized_train_loss']
+        l_unnormalized_loss_val = d_hist['unnormalized_val_loss']
 
         llp_weight_file = get_temp_file_path(
         )  # file to restore the weights when the loss landscape needs to be plotted
@@ -950,8 +993,8 @@ class NeuralNet(nn.Module):
                 "lr": l_lr,
                 "l_loss_landscapes": l_llplots,
                 "ind_epoch": ind_epoch,
-                "unnormalized_loss_train": l_unnormalized_loss_train,
-                "unnormalized_loss_val": l_unnormalized_loss_val,
+                "unnormalized_train_loss": l_unnormalized_loss_train,
+                "unnormalized_val_loss": l_unnormalized_loss_val,
             }
             save_hist(d_hist)
 
@@ -999,7 +1042,7 @@ class NeuralNet(nn.Module):
             return G
 
         def plot_unnormalized_loss():
-            l_keys = ["unnormalized_loss_train", "unnormalized_loss_val"]
+            l_keys = ["unnormalized_train_loss", "unnormalized_val_loss"]
             l_keys_to_plot = []
             for key in l_keys:
                 l_vals = d_hist[key]

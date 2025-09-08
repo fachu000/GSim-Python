@@ -109,15 +109,26 @@ else
 fi
 
 EXAMPLE_EXPERIMENTS_FOLDER="experiments"
-EXAMPLE_EXPERIMENTS=$EXAMPLE_EXPERIMENTS_FOLDER"/example_experiments.py"
-mkdir -p experiments
-if [ -z "$( ls $EXAMPLE_EXPERIMENTS_FOLDER )" ] 
-then
-    echo "Copying "$GSIM_DIR$INSTALLATION_FOLDER"/example_experiments.py to "$EXAMPLE_EXPERIMENTS
-    cp -n $GSIM_DIR$INSTALLATION_FOLDER"/example_experiments.py" $EXAMPLE_EXPERIMENTS
-else
-    echo "Folder $EXAMPLE_EXPERIMENTS_FOLDER already contains files."
-fi
+mkdir -p "$EXAMPLE_EXPERIMENTS_FOLDER"
+
+# Copies an experiment file from the installation folder into the experiments folder
+# only if the destination file does not already exist.
+function copy_experiment_file {
+    local filename="$1"
+    local src="${GSIM_DIR}${INSTALLATION_FOLDER}/${filename}"
+    local dest="${EXAMPLE_EXPERIMENTS_FOLDER}/${filename}"
+
+    if [ ! -f "$dest" ]; then
+        echo "Copying $src to $dest"
+        cp -n "$src" "$dest"
+    else
+        echo "File $dest already exists. Skipping copy."
+    fi
+}
+
+# Copy the default example experiments file if missing
+copy_experiment_file "example_experiments.py"
+copy_experiment_file "neuralnet_experiments.py"
 
 echo -e "Done.\n"
 
