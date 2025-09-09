@@ -23,8 +23,18 @@ gsim_logger = logging.getLogger("gsim")
 
 class Normalizer(ABC):
 
+    l_params_to_save = [
+    ]  # List the attributes to be saved/loaded in this list
+
     def __init__(self, nn_folder: str | None = None):
-        """        
+        """       
+
+        General scheme of normalization and unnormalization
+        ---------------------------------------------------
+
+        Training: 
+        - - - - -
+
                            ┌───┐      ┌─────────┐  predictions  ┌──────┐
            ┌-> features -> │ 1 │ ---> | forward | ---┬--------->| loss |-----> normalized loss
            |               └───┘      └─────────┘    |    ┌─--->|      | 
@@ -37,11 +47,37 @@ class Normalizer(ABC):
            └-> targets  ----------------| 2 |-------------|     ┌───┐   ┌─->|      |
                                         └───┘             └-----| 4 |---┘   └──────┘
                                                                 └───┘
+        
+        Prediction:
+        - - - - - -
+                           ┌───┐      ┌─────────┐  predictions  ┌───┐        unnormalized 
+               features -> │ 1 │ ---> | forward | ------------->| 3 |----->  predictions
+                           └───┘      └─────────┘               └───┘
+        
+        Legend:        
+        - - - -
+        
         1. normalize_feats_batch      |
         2. normalize_targets_batch    | -> NeuralNet.collate_fn
         
         3. unnormalize_preds_batch    |
         4. unnormalize_targets_batch  | -> NeuralNet.make_unnormalized_loss
+
+        
+        Remarks:
+        - - - - 
+
+            - The unnormalized loss is computed only if requested (eval_unnormalized_loss). 
+
+            - The normalization (1 and 2) is applied in the DataLoader. One
+              could think of alternatively normalizing the entire dataset before
+              training, but that would require storage space equal to the size
+              of the dataset. For this reason, normalization is carried out in
+              the DataLoader. 
+
+            - Steps 1 and 2 are performed in the CPU. The forward and upper loss
+              computations are carried out by the GPU. Thus, while the GPU
+              processes one batch, the CPU can normalize the next batches.
 
         """
         self.nn_folder = nn_folder
@@ -51,12 +87,30 @@ class Normalizer(ABC):
         pass
 
     def save(self):
-        # To be overridden if necessary
-        pass
+        # Override if necessary
+        if self.nn_folder is None:
+            return
+
+        d_params = {
+            param: getattr(self, param)
+            for param in self.l_params_to_save
+        }
+
+        assert self.params_file is not None
+        if os.path.exists(self.nn_folder):
+            with open(self.params_file, "wb") as f:
+                pickle.dump(d_params, f)
 
     def load(self):
-        # To be overridden if necessary
-        pass
+        # Override if necessary
+        if self.nn_folder is None:
+            return
+        assert self.params_file is not None
+        with open(self.params_file, "rb") as f:
+            d_params = pickle.load(f)
+            for param in self.l_params_to_save:
+                assert param in d_params, f"{param} not found in {self.params_file}."
+                setattr(self, param, d_params[param])
 
     @property
     def params_file(self):
@@ -71,6 +125,10 @@ class Normalizer(ABC):
 
             `t_feats`: batch_size x ... (feature tensor)
 
+        Returns:
+
+            normalized features tensor of same shape as `t_feats`.
+
         """
         pass
 
@@ -80,6 +138,21 @@ class Normalizer(ABC):
         Args:
 
             `t_targets`: batch_size x ... (target tensor)
+
+        Returns:
+            normalized targets tensor of same shape as `t_targets`.
+        """
+        pass
+
+    @abstractmethod
+    def unnormalize_preds_batch(self, t_preds: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+
+            `t_preds`: batch_size x ... (predictions tensor)
+
+        Returns:
+            unnormalized predictions tensor of same shape as `t_preds`.
 
         """
         pass
@@ -92,15 +165,8 @@ class Normalizer(ABC):
 
             `t_targets`: batch_size x ... (target tensor)
 
-        """
-        pass
-
-    @abstractmethod
-    def unnormalize_preds_batch(self, t_preds: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-
-            `t_preds`: batch_size x ... (predictions tensor)
+        Returns:
+            unnormalized targets tensor of same shape as `t_targets`.
 
         """
         pass
@@ -121,6 +187,10 @@ class Normalizer(ABC):
 
 
 class DefaultNormalizer(Normalizer):
+
+    l_params_to_save = [
+        "t_feats_mean", "t_feats_std", "t_targets_mean", "t_targets_std"
+    ]
 
     def __init__(self, mode: str, **kwargs):
         """
@@ -156,33 +226,6 @@ class DefaultNormalizer(Normalizer):
         self.t_feats_std = None  # same shape as the features
         self.t_targets_mean = None  # same shape as the targets
         self.t_targets_std = None  # same shape as the targets
-
-    def save(self):
-        # To be overridden if necessary
-        if self.nn_folder is None:
-            return
-        d_params = {
-            "t_feats_mean": self.t_feats_mean,
-            "t_feats_std": self.t_feats_std,
-            "t_targets_mean": self.t_targets_mean,
-            "t_targets_std": self.t_targets_std
-        }
-
-        assert self.params_file is not None
-        if os.path.exists(self.nn_folder):
-            with open(self.params_file, "wb") as f:
-                pickle.dump(d_params, f)
-
-    def load(self):
-        if self.nn_folder is None:
-            return
-        assert self.params_file is not None
-        with open(self.params_file, "rb") as f:
-            d_params = pickle.load(f)
-            self.t_feats_mean = d_params["t_feats_mean"]
-            self.t_feats_std = d_params["t_feats_std"]
-            self.t_targets_mean = d_params["t_targets_mean"]
-            self.t_targets_std = d_params["t_targets_std"]
 
     def fit(self, dataset: Dataset):
 
