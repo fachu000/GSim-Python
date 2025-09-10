@@ -1,14 +1,16 @@
-from abc import ABC, abstractmethod
-from collections.abc import Sized
+import logging
 import os
 import pickle
 import tempfile
-import logging
+from abc import ABC, abstractmethod
+from collections.abc import Sized
 from typing import Union
+
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset, Subset, random_split, default_collate
+from torch.utils.data import (DataLoader, Dataset, Subset, default_collate,
+                              random_split)
 from tqdm import tqdm
 
 from gsim.gfigure import Subplot
@@ -455,12 +457,25 @@ class NeuralNet(nn.Module):
         # Override if needed
         return example
 
-    def collate_and_normalize(self, l_batch):
-        # l_batch is typ. a list of batch_size pairs (features, targets)
+    def collate_and_normalize(self, l_batch, only_features=False):
+        """
+        Args:
+            
+            l_batch' is typ. a list of batch_size pairs (features, targets) or
+            only features.
+
+            'only_features' (bool): If True, the batch contains only features.
+            Else, it contains both features and targets.
+
+        """
+
         l_batch = self.collate_fn(l_batch)
         # After collation, l_batch is typ. a list of tensors (feats_batch, targets_batch)
         if self.normalizer is not None:
-            l_batch = self.normalizer.normalize_example_batch(l_batch)
+            if only_features:
+                l_batch = self.normalizer.normalize_feats_batch(l_batch)
+            else:
+                l_batch = self.normalizer.normalize_example_batch(l_batch)
         return l_batch
 
     def make_unnormalized_loss(self, f_loss):
@@ -483,18 +498,10 @@ class NeuralNet(nn.Module):
         f_loss(unnormalize(self(feats)),unnormalize(targets)).
         """
 
-        def move_to_device(obj: Union[torch.Tensor, list, tuple]):
-            if isinstance(obj, torch.Tensor):
-                return obj.float().to(self.device_type)
-            elif isinstance(obj, (list, tuple)):
-                return type(obj)(move_to_device(item) for item in obj)
-            else:
-                raise TypeError("Unsupported type.")
-
         assert f_loss is not None, "f_loss must be provided unless you override _get_loss."
         feat_batch, targets_batch = data
-        feat_batch = move_to_device(feat_batch)
-        targets_batch = move_to_device(targets_batch)
+        feat_batch = self._move_to_device(feat_batch)
+        targets_batch = self._move_to_device(targets_batch)
 
         v_targets_batch_pred = self(feat_batch)
         #assert v_targets_batch_pred.shape == v_targets_batch.shape
@@ -562,36 +569,110 @@ class NeuralNet(nn.Module):
         loss = self._run_epoch(dataloader, f_loss=f_loss)
         return {"loss": loss}
 
-    def predict(self, dataset, batch_size=32, unnormalize=True):
-        """
-        [WIP] This function has not been tested when there is normalization. We
-        can extend it so that it can take also a tensor as input. 
+    class NeuralNetDataset(Dataset):
 
-        Returns a tensor with the result of performing a forward pass on the
-        points in `dataset`. 
+        def __init__(self, l_preds):
+            self.l_preds = l_preds
+
+        def __len__(self):
+            return len(self.l_preds)
+
+        def __getitem__(self, idx):
+            return self.l_preds[idx]
+
+    def predict(self,
+                data: Union[tuple, list, torch.Tensor, Dataset],
+                batch_size=32,
+                unnormalize=True,
+                data_includes_targets=False,
+                output_class: None | tuple | list | torch.Tensor
+                | Dataset = None):
+        """
+
+        Args:
+            'data': A tuple/list/Tensor/Dataset whose items are:
+                - features (input of self.forward), if data_includes_targets is
+                  False.
+
+                - pairs (features, targets) if data_includes_targets is True
+
+        Returns:
+            The predictions in an object of class 'output_class'. If
+        'output_class' is None, it is set to type('data').
         
         If `unnormalize` is True, the unnormalized predictions are returned.
 
         """
+
+        def uncollate(l_batches):
+            """
+            #TODO: Finish writing and testing this
+            Args:
+                'l_batches': a list of items with the same type and shape as the
+                output of self.forward.
+
+            Returns:
+                A list of predictions:
+                    - If the items are (batch_size x ...) tensors, then the
+                      function returns the concatenation of these tensors along
+                      the first axis.
+
+                    - If the items are lists or tuples of tensors of (batch_size x
+                    ...) tensors, then the function returns a list/tuple of the
+                    concatenated tensors.
+            """
+
+            if isinstance(l_batches[0], torch.Tensor):
+                return torch.cat(l_batches, dim=0)
+            elif isinstance(l_batches[0], (list, tuple)):
+                return type(l_batches[0])(torch.cat(batch, dim=0)
+                                          for batch in zip(*l_batches))
+            else:
+                raise TypeError(
+                    f"Unsupported batch type: {type(l_batches[0])}")
+
+        def make_output(l_out, output_class):
+            if output_class is None:
+                output_class = Dataset if isinstance(data,
+                                                     Dataset) else type(data)
+
+            if output_class == tuple:
+                return tuple(l_out)
+            elif output_class == list:
+                return l_out
+            elif output_class == torch.Tensor:
+                return torch.cat(l_out, dim=0)
+            elif output_class == Dataset:
+                return NeuralNet.NeuralNetDataset(l_out)
+            else:
+                raise TypeError(f"Unsupported data type: {output_class}")
+
         self._assert_initialized()
 
         if not unnormalize and self.normalizer is None:
             raise ValueError(
                 "Cannot return normalized predictions if a normalizer is not set."
             )
+        if not isinstance(data, Dataset):
+            dataset = NeuralNet.NeuralNetDataset(data)
+        else:
+            dataset = data
 
-        dataloader = self.make_data_loader(dataset, batch_size=batch_size)
+        data_loader = self.make_data_loader(
+            dataset,
+            batch_size=batch_size,
+            only_features=not data_includes_targets)
         l_out = []
         self.eval()
-        for m_feat_batch, _ in dataloader:
-            m_targets_batch_pred = self(m_feat_batch.float().to(
-                self.device_type)).detach().cpu()
+        for batch in data_loader:
+            feat_batch = batch[0] if data_includes_targets else batch
+            feat_batch = self._move_to_device(feat_batch)
+            preds_batch = self._move_to_cpu(self(feat_batch))
             if unnormalize and self.normalizer is not None:
-                m_targets_batch_pred = self.normalizer.unnormalize_targets_batch(
-                    m_targets_batch_pred)
-            l_out.append(m_targets_batch_pred)
-
-        return torch.concat(l_out, dim=0)
+                preds_batch = self.normalizer.unnormalize_preds_batch(
+                    preds_batch)
+            l_out.append(preds_batch)
+        return make_output(uncollate(l_out), output_class)
 
     @property
     def weight_file_path(self):
@@ -622,11 +703,24 @@ class NeuralNet(nn.Module):
     def save_weights_to_path(self, path):
         torch.save({"weights": self.state_dict()}, path)
 
-    def make_data_loader(self, dataset, batch_size, shuffle=None):
-        return DataLoader(dataset,
-                          batch_size=batch_size,
-                          shuffle=shuffle,
-                          collate_fn=self.collate_and_normalize)
+    def make_data_loader(self,
+                         dataset,
+                         batch_size,
+                         shuffle=None,
+                         only_features=False):
+        """
+        Args:
+        
+            'only_features' (bool): If True, the batch contains only features.
+            Else, it contains both features and targets.
+
+        """
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            collate_fn=lambda l_batch: self.collate_and_normalize(
+                l_batch, only_features=only_features))
 
     def fit(self,
             dataset: Dataset,
@@ -1054,6 +1148,23 @@ class NeuralNet(nn.Module):
                     self.load_weights_from_path(best_train_loss_weight_file)
 
         return d_hist
+
+    def _move_to_device(self, obj: Union[torch.Tensor, list, tuple]):
+        if isinstance(obj, torch.Tensor):
+            return obj.float().to(self.device_type)
+        elif isinstance(obj, (list, tuple)):
+            return type(obj)(self._move_to_device(item) for item in obj)
+        else:
+            raise TypeError("Unsupported type.")
+
+    @staticmethod
+    def _move_to_cpu(obj: Union[torch.Tensor, list, tuple]):
+        if isinstance(obj, torch.Tensor):
+            return obj.detach().to("cpu")
+        elif isinstance(obj, (list, tuple)):
+            return type(obj)(NeuralNet._move_to_cpu(item) for item in obj)
+        else:
+            raise TypeError("Unsupported type.")
 
     @staticmethod
     def plot_training_history(d_hist, first_epoch_to_plot=0):
