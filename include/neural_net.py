@@ -20,6 +20,13 @@ try:
 except ImportError:
     from gsim import GFigure
 """
+This module provides a utility layer on top of PyTorch to facilitate the
+development and deployment of neural networks. 
+
+For examples, install gsim and run the experiments in
+`experiments/neuralnet_experiments.py`.
+
+----
 
 Terminology:
 
@@ -39,12 +46,12 @@ From these batch definitions, one can define:
 
     - input: each of the items of an input batch. Thus, 
         - if the input batch is a (batch_size, N_1,...,N_D) tensor, then
-            the inputs are tensors of shape (N_1,...,N_D). The entries of
-            these tensors are referred to as "features".
+            the inputs are tensors of shape (N_1,...,N_D). The entries of these
+            tensors are referred to as "features".
         - if the input batch is a list/tuple of tensors, each of shape
             (batch_size, N_1,...,N_D), then the inputs are lists/tuples of
-            tensors, each of shape (N_1,...,N_D). The entries of these
-            tensors are referred to as "features". 
+            tensors, each of shape (N_1,...,N_D). The entries of these tensors
+            are referred to as "features". 
         
     - output: Defined likewise. The entries of the output are referred to
         as "predictions".
@@ -53,19 +60,23 @@ From these batch definitions, one can define:
         "targets entries".
         
 Notes: 
-    - In the past, the term "features" was used to refer to "input".
-        However, since this is plural, we did not have a way of referring
-        to multiple inputs besides `feature batch`. The term `feature
-        batch` only applied to the case where the inputs formed a batch.
-        So, if one wanted to refer to a collection of inputs (e.g. a
-        dataset), one would have to say `a collection of num_feat
-        features`, which was confusing since it seemed to refer to the
-        entries of an input. 
+    - In the past, the term "features" was used to refer to "input". However,
+      since this is plural, we did not have a way of referring to multiple
+      inputs besides `feature batch`. The term `feature batch` only applied to
+      the case where the inputs formed a batch. So, if one wanted to refer to a
+      collection of inputs (e.g. a dataset), one would have to say `a collection
+      of num_feat features`, which was confusing since it seemed to refer to the
+      entries of an input. 
 
 
 """
 
 gsim_logger = logging.getLogger("gsim")
+
+# Type variables: InputType refers both to the input and input batch types.
+# Likewise for OutputType and TargetType. We do not use separate type variables
+# for batches and inputs/outputs/targets due to limitations in the Python typing
+# system.
 
 InputType = TypeVar("InputType", torch.Tensor, list[torch.Tensor],
                     tuple[torch.Tensor, ...])
@@ -74,16 +85,10 @@ OutputType = TypeVar("OutputType", torch.Tensor, list[torch.Tensor],
 TargetType = TypeVar("TargetType", torch.Tensor, list[torch.Tensor],
                      tuple[torch.Tensor, ...])
 
-InputBatchType = TypeVar("InputBatchType", torch.Tensor, list[torch.Tensor],
-                         tuple[torch.Tensor, ...])
-OutputBatchType = TypeVar("OutputBatchType", torch.Tensor, list[torch.Tensor],
-                          tuple[torch.Tensor, ...])
-TargetBatchType = TypeVar("TargetBatchType", torch.Tensor, list[torch.Tensor],
-                          tuple[torch.Tensor, ...])
+LossFunType = Callable[[OutputType, TargetType], torch.Tensor]
 
 
-class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
-                              TargetBatchType]):
+class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
 
     l_params_to_save = [
     ]  # List the attributes to be saved/loaded in this list
@@ -97,7 +102,7 @@ class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
         Training: 
         - - - - -
 
-                             ┌───┐      ┌─────────┐  pred batch   ┌──────┐
+                             ┌───┐      ┌─────────┐  output batch ┌──────┐
            ┌-> input batch-> │ 1 │ ---> | forward | ---┬--------->| loss |-----> normalized loss
            |                 └───┘      └─────────┘    |    ┌─--->|      | 
            |                                           |    |     └──────┘
@@ -112,8 +117,8 @@ class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
         
         Prediction:
         - - - - - -
-                           ┌───┐      ┌─────────┐  pred batch   ┌───┐        unnormalized 
-            input batch -> │ 1 │ ---> | forward | ------------->| 3 |----->  predictions
+                           ┌───┐      ┌─────────┐  output batch ┌───┐        unnormalized 
+            input batch -> │ 1 │ ---> | forward | ------------->| 3 |----->  outputs
                            └───┘      └─────────┘               └───┘
         
         Legend:        
@@ -181,8 +186,7 @@ class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
         return os.path.join(self.nn_folder, "normalizer.pk")
 
     @abstractmethod
-    def normalize_input_batch(self,
-                              input_batch: InputBatchType) -> InputBatchType:
+    def normalize_input_batch(self, input_batch: InputType) -> InputType:
         """
         Args:
 
@@ -196,8 +200,7 @@ class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
         pass
 
     @abstractmethod
-    def normalize_targets_batch(
-            self, targets_batch: TargetBatchType) -> TargetBatchType:
+    def normalize_targets_batch(self, targets_batch: TargetType) -> TargetType:
         """
         Args:
 
@@ -209,22 +212,21 @@ class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
         pass
 
     @abstractmethod
-    def unnormalize_output_batch(
-            self, output_batch: OutputBatchType) -> OutputBatchType:
+    def unnormalize_output_batch(self, output_batch: OutputType) -> OutputType:
         """
         Args:
 
-            `output_batch`: batch_size x ... (predictions tensor)
+            `output_batch`: batch_size x ... (output tensor)
 
         Returns:
-            unnormalized predictions tensor of same shape as `output_batch`.
+            unnormalized output tensor of same shape as `output_batch`.
 
         """
         pass
 
     @abstractmethod
-    def unnormalize_targets_batch(
-            self, targets_batch: TargetBatchType) -> TargetBatchType:
+    def unnormalize_targets_batch(self,
+                                  targets_batch: TargetType) -> TargetType:
         """
         Args:
 
@@ -237,8 +239,8 @@ class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
         pass
 
     def normalize_example_batch(
-        self, l_batch: tuple[InputBatchType, TargetBatchType]
-    ) -> tuple[InputBatchType, TargetBatchType]:
+            self, l_batch: tuple[InputType,
+                                 TargetType]) -> tuple[InputType, TargetType]:
         """
         In datasets formed by pairs (input, targets), batch is a
         list of length 2. The first element of this list is a batch
@@ -250,7 +252,7 @@ class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
                 self.normalize_targets_batch(targets_batch))
 
 
-class DefaultNormalizer(Normalizer[torch.Tensor, torch.Tensor, torch.Tensor]):
+class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
 
     l_params_to_save = [
         "input_batch_mean", "input_batch_std", "targets_batch_mean",
@@ -263,7 +265,7 @@ class DefaultNormalizer(Normalizer[torch.Tensor, torch.Tensor, torch.Tensor]):
 
         This class separately normalizes each entry of the input and targets.
         For example, if the input are an M x N matrix, then normalization
-        will subtract a mean M x N matrix obtained by averaging the feature
+        will subtract a mean M x N matrix obtained by averaging the input
         matrices in the dataset and will divide by the standard deviation M x N
         matrix obtained likewise. 
 
@@ -286,10 +288,10 @@ class DefaultNormalizer(Normalizer[torch.Tensor, torch.Tensor, torch.Tensor]):
                         ], 'mode must be one of "input", "targets", or "both".'
         self.mode = mode
 
-        self.input_batch_mean = None  # same shape as the input
-        self.input_batch_std = None  # same shape as the input
-        self.targets_batch_mean = None  # same shape as the targets
-        self.targets_batch_std = None  # same shape as the targets
+        self.input_batch_mean: torch.Tensor | None = None  # same shape as the input
+        self.input_batch_std: torch.Tensor | None = None  # same shape as the input
+        self.targets_batch_mean: torch.Tensor | None = None  # same shape as the targets
+        self.targets_batch_std: torch.Tensor | None = None  # same shape as the targets
 
     def fit(self, dataset: Dataset):
 
@@ -346,27 +348,32 @@ class DefaultNormalizer(Normalizer[torch.Tensor, torch.Tensor, torch.Tensor]):
                 # Avoid division by zero
                 self.targets_batch_std[self.targets_batch_std == 0] = 1.0
 
-    def normalize_input_batch(self, input_batch: torch.Tensor) -> torch.Tensor:
+    def normalize_input_batch(self, input_batch: InputType) -> InputType:
         """
         Args:
 
-            `input_batch`: shape (batch_size, *feats_shape)
+            `input_batch`: shape (batch_size, ...)
 
         """
+        if isinstance(input_batch, (list, tuple)):
+            raise NotImplementedError()
+
         if self.mode in ["input", "both"]:
             assert self.input_batch_mean is not None and self.input_batch_std is not None, "The normalizer has not been fitted or loaded from a file."
             return (input_batch - self.input_batch_mean[None, ...]
                     ) / self.input_batch_std[None, ...]
         return input_batch
 
-    def normalize_targets_batch(self,
-                                targets_batch: torch.Tensor) -> torch.Tensor:
+    def normalize_targets_batch(self, targets_batch: TargetType) -> TargetType:
         """
         Args:
 
             `targets_batch`: shape (batch_size, *targets_shape)
 
         """
+        if isinstance(targets_batch, (list, tuple)):
+            raise NotImplementedError()
+
         if self.mode in ["targets", "both"]:
             assert self.targets_batch_mean is not None and self.targets_batch_std is not None, "The normalizer has not been fitted or loaded from a file."
             return (targets_batch - self.targets_batch_mean[None, ...]
@@ -374,28 +381,32 @@ class DefaultNormalizer(Normalizer[torch.Tensor, torch.Tensor, torch.Tensor]):
         return targets_batch
 
     def unnormalize_targets_batch(self,
-                                  targets_batch: torch.Tensor) -> torch.Tensor:
+                                  targets_batch: TargetType) -> TargetType:
         """
         Args:
 
             `targets_batch`: shape (batch_size, *targets_shape)
 
         """
+        if isinstance(targets_batch, (list, tuple)):
+            raise NotImplementedError()
+
         if self.mode in ["targets", "both"]:
             assert self.targets_batch_mean is not None and self.targets_batch_std is not None, "The normalizer has not been fitted or loaded from a file."
             return targets_batch.to("cpu") * self.targets_batch_std[
                 None, ...] + self.targets_batch_mean[None, ...]
         return targets_batch
 
-    def unnormalize_output_batch(self,
-                                 output_batch: torch.Tensor) -> torch.Tensor:
+    def unnormalize_output_batch(self, output_batch: OutputType) -> OutputType:
         """
         Args:
 
             `output_batch`: shape (batch_size, *targets_shape)
 
         """
-        return self.unnormalize_targets_batch(output_batch)
+        if isinstance(output_batch, (list, tuple)):
+            raise NotImplementedError()
+        return self.unnormalize_targets_batch(output_batch)  # type: ignore
 
 
 class LossLandscapeConfig():
@@ -425,7 +436,22 @@ class LossLandscapeConfig():
         self.max_num_directions = max_num_directions
 
 
-class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
+class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
+    """
+    Type arguments:
+
+    - InputType: the type of the inputs and input batches.
+
+    - OutputType: the type of the outputs and output batches.
+
+    - TargetType: the type of the targets and target batches.
+
+    Note: The above syntax can be understood more easily in other languages. For
+    example, in Typescript, one would write
+
+    abstract class NeuralNet<InputType, OutputType> extends nn.Module { ... }
+    
+    """
 
     _initialized = False
 
@@ -523,12 +549,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         # Override if needed
         return default_collate(*args, **kwargs)
 
-    def uncollate_fn(self, l_batches):
+    def uncollate_fn(self, l_batches: list[OutputType]) -> list[OutputType]:
         """            
         Args:
-            'l_batches': a list of output batches. Recall from the
-            terminology above that output batches can be tensors, lists,
-            or tuples. 
+            'l_batches': a list of output batches. Recall from the terminology
+            above that output batches are of type OutpuType and, thus, they can
+            be tensors, lists, or tuples. 
 
         Returns:
             A list of outputs. Thus, 
@@ -538,8 +564,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
                     shape (N_1,...,N_D), where N is the sum of the batch sizes.
 
                 - If the output batches are lists/tuples of (batch_size,
-                    N_1,...,N_D) tensors, then the function returns a list of
-                    N lists/tuples of tensors of shape (N_1,...,N_D).
+                    N_1,...,N_D) tensors, then the function returns a list of N
+                    lists/tuples of tensors of shape (N_1,...,N_D).
                     
         """
 
@@ -547,7 +573,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
             return [
                 l_batches[ind_batch][ind_output]
                 for ind_batch in range(len(l_batches))
-                for ind_output in range(l_batches[ind_batch].size(0))
+                for ind_output in range(len(l_batches[ind_batch]))
             ]
 
         elif isinstance(l_batches[0], (list, tuple)):
@@ -555,7 +581,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
             #
             #  l_batches = [ (T1,T2,T3), (T4,T5,T6), ... ]
             #
-            # then we want to return
+            # then the output is
             #
             #  [ (T1[0], T2[0], T3[0]), (T1[1], T2[1], T3[1]), ..., (T1[B1-1], T2[B1-1], T3[B1-1]),
             #   (T4[0], T5[0], T6[0]), (T4[1], T5[1], T6[1]), ..., (T4[B2-1], T5[B2-1], T6[B2-1]),
@@ -572,15 +598,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         else:
             raise TypeError(f"Unsupported batch type: {type(l_batches[0])}")
 
-    def normalize(self, example):
-        # Override if needed
-        return example
-
-    def collate_and_normalize(self, l_batch, no_targets=False):
+    def collate_and_normalize(self,
+                              l_batch: list[tuple[InputType, TargetType]]
+                              | list[InputType],
+                              no_targets=False):
         """
         Args:
             
-            l_batch' is typ. a list of batch_size pairs (inputs, targets) or
+            l_batch' is a list of batch_size pairs (inputs, targets) or
             only inputs.
 
             'no_targets' (bool): If True, the batch contains only inputs.
@@ -589,23 +614,27 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         """
 
         l_batch = self.collate_fn(l_batch)
-        # After collation, l_batch is typ. a list of tensors (feats_batch, targets_batch)
+
+        # After collation, l_batch is (input_batch, targets_batch)
         if self.normalizer is not None:
             if no_targets:
-                l_batch = self.normalizer.normalize_input_batch(l_batch)
+                a = self.normalizer.normalize_input_batch(l_batch)
+                l_batch = a
             else:
-                l_batch = self.normalizer.normalize_example_batch(l_batch)
+                l_batch = self.normalizer.normalize_example_batch(
+                    l_batch)  # type: ignore
         return l_batch
 
-    def make_unnormalized_loss(self, f_loss):
+    def make_unnormalized_loss(self, f_loss: LossFunType) -> LossFunType:
         normalizer = self.normalizer
         assert normalizer is not None
-        return lambda pred, target: f_loss(
-            normalizer.unnormalize_output_batch(pred),
-            normalizer.unnormalize_targets_batch(target),
+        return lambda output_batch, target_batch: f_loss(
+            normalizer.unnormalize_output_batch(output_batch),
+            normalizer.unnormalize_targets_batch(target_batch),
         )
 
-    def _get_loss(self, data, f_loss):
+    def _get_loss(self, data: tuple[InputType, TargetType],
+                  f_loss: LossFunType):
         """
         Args:
 
@@ -614,32 +643,33 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
 
         If `unnormalize` is True, the unnormalized loss is returned. This is
         just the result of
-        f_loss(unnormalize(self(feats)),unnormalize(targets)).
+             f_loss(
+                 unnormalize(self(input_batch)),
+                 unnormalize(target_batch)
+                 ).
         """
 
         assert f_loss is not None, "f_loss must be provided unless you override _get_loss."
-        feat_batch, targets_batch = data
-        feat_batch = self._move_to_device(feat_batch)
+        input_batch, targets_batch = data
+        input_batch = self._move_to_device(input_batch)
         targets_batch = self._move_to_device(targets_batch)
 
-        v_targets_batch_pred = self(feat_batch)
-        #assert v_targets_batch_pred.shape == v_targets_batch.shape
-        loss = f_loss(v_targets_batch_pred, targets_batch)
+        output_batch = self(input_batch)
+        loss = f_loss(output_batch, targets_batch)
 
         if isinstance(targets_batch, torch.Tensor):
             assert loss.shape[0] == targets_batch.shape[
                 0] and loss.ndim == 1, "f_loss must return a vector of length batch_size."
         return loss
 
-    def _run_epoch(self, dataloader, f_loss, optimizer=None):
+    def _run_epoch(self, dataloader, f_loss: LossFunType, optimizer=None):
         """
         Args:
 
             `optimizer`: if None, the weights are not updated. This is useful to
             evaluate the loss. 
 
-            `f_loss`: f_loss(pred,targets) where pred.shape[0] =
-            targets.shape[0] = batch_size is a vector of length batch_size.
+            `f_loss`: LossFunType
         
         """
 
@@ -663,7 +693,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         return float(torch.cat(l_loss_this_epoch).mean().cpu().numpy()) if len(
             l_loss_this_epoch) else np.nan
 
-    def evaluate(self, dataset, batch_size, f_loss, unnormalized=True):
+    def evaluate(self,
+                 dataset,
+                 batch_size,
+                 f_loss: LossFunType,
+                 unnormalized=True):
         """
         Args:
 
@@ -690,15 +724,16 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
 
     class NeuralNetDataset(Dataset):
 
-        def __init__(self, l_preds: list[InputType] | torch.Tensor
+        def __init__(self, l_items: \
+                     list[InputType] | torch.Tensor
                      | tuple[InputType] | list[InputType]):
-            self.l_preds = l_preds
+            self.l_items = l_items
 
         def __len__(self):
-            return len(self.l_preds)  # type: ignore
+            return len(self.l_items)  # type: ignore
 
         def __getitem__(self, idx):
-            return self.l_preds[idx]
+            return self.l_items[idx]
 
     def predict(self,
                 data: Union[torch.Tensor, tuple[InputType], list[InputType],
@@ -784,8 +819,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
 
         if not unnormalize and self.normalizer is None:
             raise ValueError(
-                "Cannot return normalized predictions if a normalizer is not set."
-            )
+                "Cannot return normalized outputs if a normalizer is not set.")
         if not isinstance(data, Dataset):
             dataset_includes_targets = False
             dataset = NeuralNet.NeuralNetDataset(data)
@@ -803,17 +837,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         self.eval()
         for batch in data_loader:
             # Ignore the targets if present
-            feat_batch = batch[0] if dataset_includes_targets else batch
+            input_batch = batch[0] if dataset_includes_targets else batch
 
             # Run the forward pass
-            feat_batch = self._move_to_device(feat_batch)
-            preds_batch = self._move_to_cpu(self(feat_batch))
+            input_batch = self._move_to_device(input_batch)
+            output_batch = self._move_to_cpu(self(input_batch))
             if unnormalize and self.normalizer is not None:
-                preds_batch = self.normalizer.unnormalize_output_batch(
-                    preds_batch)
+                output_batch = self.normalizer.unnormalize_output_batch(
+                    output_batch)
 
             # l_out is a list of batches
-            l_out.append(preds_batch)
+            l_out.append(output_batch)
         return make_output(self.uncollate_fn(l_out), output_class)
 
     @property
@@ -934,12 +968,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
                       
            'unnormalized_train_loss': list of length num_epochs with the values
            of the training loss computed at the end of each epoch after
-           unnormalizing the targets and the predictions. These values are only
+           unnormalizing the targets and the outputs. These values are only
            computed if `eval_unnormalized_loss` is True; else they are np.nan.
 
            'unnormalized_val_loss': list of length num_epochs with the values of
            the validation loss computed at the end of each epoch after
-           unnormalizing the targets and the predictions. Only if `val` is True.
+           unnormalizing the targets and the outputs. Only if `val` is True.
            These values are only computed if `eval_unnormalized_loss` is True;
            else they are np.nan.
 
@@ -973,15 +1007,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
             self.train()
             ll_loss = [
             ]  # One list per considered batch. Each inner list contains the loss for each distance.
-            for m_feat_batch, targets_batch in dataloader_train:
+            for input_batch, targets_batch in dataloader_train:
 
                 # 1. Compute the gradient
-                m_feat_batch = m_feat_batch.float().to(self.device_type)
+                input_batch = input_batch.float().to(self.device_type)
                 targets_batch = targets_batch.float().to(self.device_type)
 
-                targets_batch_pred = self(m_feat_batch.float())
-                loss = f_loss(targets_batch_pred.float(),
-                              targets_batch.float())
+                output_batch = self(input_batch.float())
+                loss = f_loss(output_batch.float(), targets_batch.float())
                 torch.mean(loss).backward()
 
                 # 2. Compute the loss for gradient displacement
@@ -991,13 +1024,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
                         param.data -= scale * param.grad
 
                     with torch.no_grad():  # Disable gradient computation
-                        targets_batch_pred = self(m_feat_batch.float())[:, 0]
-                        # loss = f_loss(v_targets_batch.float(),
-                        #               v_targets_batch_pred.float())
+                        output_batch = self(input_batch.float())[:, 0]
                         self.train()
                         loss = self._run_epoch(dataloader_train_eval, f_loss)
-                        # loss = self.evaluate(dataset_train, batch_size_eval,
-                        #                      f_loss)['loss']
                     l_loss.append(loss)
 
                     # Restore the weights (can alt. be combined with next iteration)
@@ -1367,66 +1396,3 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
     def print_num_parameters(self):
         total_params = sum(p.numel() for p in self.parameters())
         print(f'Total number of parameters: {total_params}')
-
-
-if __name__ == "__main__":
-    """
-    To run this test code, execute:
-
-    python -m gsim.include.neural_net
-
-    from the root folder of the repository.
-    
-    """
-
-    from gsim import init_gsim_logger
-    init_gsim_logger()
-
-    class MyDataset(Dataset):
-
-        def __init__(self, num_examples):
-            self.num_examples = num_examples
-            self.m_feat = torch.randn(num_examples, 2)
-            self.m_targets = torch.sum(
-                self.m_feat, dim=1,
-                keepdim=True) + 0.5 * torch.randn(num_examples, 1)
-
-        def __len__(self):
-            return self.num_examples
-
-        def __getitem__(self, ind):
-            return self.m_feat[ind], self.m_targets[ind]
-
-    class MyNet(NeuralNet):
-
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.fc = nn.Linear(2, 1)
-            self.initialize()
-
-        def forward(self, x):
-            return self.fc(x)
-
-    dataset = MyDataset(1000)
-    net = MyNet()
-
-    f_loss = lambda m_pred, m_targets: torch.mean(
-        (m_targets - m_pred)**2, dim=1)
-
-    optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
-    d_training_history = net.fit(dataset,
-                                 optimizer,
-                                 val_split=0.2,
-                                 lr_patience=20,
-                                 num_epochs=200,
-                                 batch_size=200,
-                                 f_loss=f_loss,
-                                 llc=LossLandscapeConfig(
-                                     epoch_inds=[199, 399],
-                                     neg_gradient_step_scales=np.linspace(
-                                         -0.2, 0.3, 13)))
-    d_metrics = net.evaluate(dataset, batch_size=32, f_loss=f_loss)
-    print(d_metrics)
-    l_G = net.plot_training_history(d_training_history)
-    [G.plot() for G in l_G]
-    GFigure.show()

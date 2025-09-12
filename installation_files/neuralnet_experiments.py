@@ -25,7 +25,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
     # Simple experiment where a neural network is trained and tested
     def experiment_1001(l_args):
 
-        class MyDataset(Dataset):
+        class ExampleDataset(Dataset):
 
             def __init__(self, num_examples):
                 self.num_examples = num_examples
@@ -40,7 +40,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             def __getitem__(self, ind):
                 return self.m_feat[ind], self.m_targets[ind]
 
-        class MyNet(NeuralNet):
+        class ExampleNet(NeuralNet):
 
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
@@ -50,8 +50,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             def forward(self, x):
                 return self.fc(x)
 
-        dataset = MyDataset(1000)
-        net = MyNet()
+        dataset = ExampleDataset(1000)
+        net = ExampleNet()
 
         f_loss = lambda m_pred, m_targets: torch.mean(
             (m_targets - m_pred)**2, dim=1)

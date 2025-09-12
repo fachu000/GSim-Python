@@ -54,10 +54,10 @@ git config submodule.recurse true
 git config core.autocrlf true
 
 # Useful git aliases
-git config alias.lo "log --graph --decorate --pretty=oneline --abbrev-commit --all"
-git config alias.lol "log --graph --decorate --pretty=oneline --abbrev-commit"
-git config alias.lola "log --graph --decorate --pretty=oneline --abbrev-commit --all --name-status"
-git config alias.lolas "log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset%n' --abbrev-commit --date=relative --branches  --all --name-status"
+git config --global alias.lo "log --graph --decorate --pretty=oneline --abbrev-commit --all"
+git config --global alias.lol "log --graph --decorate --pretty=oneline --abbrev-commit"
+git config --global alias.lola "log --graph --decorate --pretty=oneline --abbrev-commit --all --name-status"
+git config --global alias.lolas "log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset%n' --abbrev-commit --date=relative --branches  --all --name-status"
 
 
 

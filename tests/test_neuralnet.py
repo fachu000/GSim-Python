@@ -133,7 +133,8 @@ def test_predict_when_input_and_output_are_tensors():
 
 def test_predict_when_the_input_is_a_list_and_the_output_is_a_tuple():
 
-    class TestNet(NeuralNet[list[torch.Tensor], tuple[torch.Tensor, ...]]):
+    class TestNet(NeuralNet[list[torch.Tensor], tuple[torch.Tensor, ...],
+                            tuple[torch.Tensor, ...]]):
 
         def __init__(self):
             super().__init__()
@@ -157,38 +158,56 @@ def test_predict_when_the_input_is_a_list_and_the_output_is_a_tuple():
     net = TestNet()
 
     num_inputs = 7
-    input = [[
+    inputs = [[
         torch.randint(low=0, high=10, size=(5, 6)),
         torch.randint(low=0, high=10, size=(5, 8)),
         torch.randint(low=0, high=10, size=(9, 8))
     ] for _ in range(num_inputs)]
 
     # Output of predict is a list
-    output = net.predict(input, batch_size=6)
-    assert isinstance(output, list)
-    assert len(output) == 7
+    outputs = net.predict(inputs, batch_size=6)
+    assert isinstance(outputs, list)
+    assert len(outputs) == 7
     for ind_output in range(7):
-        assert isinstance(output[ind_output], tuple)
-        assert len(output[ind_output]) == 2
-        assert output[ind_output][0].shape == (5, 14)
-        assert output[ind_output][1].shape == (14, 8)
+        assert isinstance(outputs[ind_output], tuple)
+        assert len(outputs[ind_output]) == 2
+        assert outputs[ind_output][0].shape == (5, 14)
+        assert outputs[ind_output][1].shape == (14, 8)
 
     # Output of predict is a tuple
-    output = net.predict(input, batch_size=4, output_class=tuple)
-    assert isinstance(output, tuple)
-    assert len(output) == 7
+    outputs = net.predict(inputs, batch_size=4, output_class=tuple)
+    assert isinstance(outputs, tuple)
+    assert len(outputs) == 7
     for ind_output in range(7):
-        assert isinstance(output[ind_output], tuple)
-        assert len(output[ind_output]) == 2
-        assert output[ind_output][0].shape == (5, 14)
-        assert output[ind_output][1].shape == (14, 8)
+        assert isinstance(outputs[ind_output], tuple)
+        assert len(outputs[ind_output]) == 2
+        assert outputs[ind_output][0].shape == (5, 14)
+        assert outputs[ind_output][1].shape == (14, 8)
 
     # Output of predict is a Dataset
-    output = net.predict(input, batch_size=4, output_class=Dataset)
-    assert isinstance(output, Dataset)
-    assert len(output) == 7
+    outputs = net.predict(inputs, batch_size=4, output_class=Dataset)
+    assert isinstance(outputs, Dataset)
+    assert len(outputs) == 7
     for ind_output in range(7):
-        assert isinstance(output[ind_output], tuple)
-        assert len(output[ind_output]) == 2
-        assert output[ind_output][0].shape == (5, 14)
-        assert output[ind_output][1].shape == (14, 8)
+        assert isinstance(outputs[ind_output], tuple)
+        assert len(outputs[ind_output]) == 2
+        assert outputs[ind_output][0].shape == (5, 14)
+        assert outputs[ind_output][1].shape == (14, 8)
+
+    # Use the outputs to create a dataset of pairs (input, target)
+    example_dataset = NeuralNet.NeuralNetDataset(l_items=list(
+        zip(inputs, outputs)))  # type: ignore
+    outputs = net.predict(example_dataset,
+                          batch_size=4,
+                          dataset_includes_targets=True)
+    assert isinstance(outputs, Dataset)
+    assert len(outputs) == 7
+    for ind_output in range(7):
+        prev_output = example_dataset[ind_output][1]
+        current_output = outputs[ind_output]
+        assert isinstance(current_output, tuple)
+        assert isinstance(prev_output, tuple)
+        assert len(current_output) == 2
+        assert len(prev_output) == 2
+        assert torch.equal(current_output[0], prev_output[0])
+        assert torch.equal(current_output[1], prev_output[1])
