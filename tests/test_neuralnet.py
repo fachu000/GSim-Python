@@ -7,7 +7,13 @@ from gsim.include.neural_net import NeuralNet
 
 def test_uncollate_fn_when_output_is_a_tuple():
     # In this test, the output of the network is a tuple of three tensors.
-    net = NeuralNet()  # pyright: ignore[reportAbstractUsage]
+
+    class TestNet(NeuralNet):
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.tensor([0])
+
+    net = TestNet()
 
     batch_size_1 = 4
     out_item_11 = torch.randint(low=0, high=10, size=(batch_size_1, 5, 6))
@@ -55,7 +61,12 @@ def test_uncollate_fn_when_output_is_a_tuple():
 
 def test_uncollate_fn_when_output_is_a_tensor():
     # In this test, the output of the network is a single tensor.
-    net = NeuralNet()  # pyright: ignore[reportAbstractUsage]
+    class TestNet(NeuralNet):
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.tensor([0])
+
+    net = TestNet()
 
     batch_size_1 = 4
     out_item_1 = torch.randint(low=0, high=10, size=(batch_size_1, 5, 6))

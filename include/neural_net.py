@@ -19,11 +19,71 @@ try:
     from ...gsim import GFigure
 except ImportError:
     from gsim import GFigure
+"""
+
+Terminology:
+
+    - input batch: argument of `self.forward`. It can be:
+        - a tensor of shape (batch_size, ...)
+        - a list/tuple of tensors, each of shape (batch_size, ...)
+
+    - output batch: what `self.forward` returns. It can be:
+        - a tensor of shape (batch_size, ...)
+        - a list/tuple of tensors, each of shape (batch_size, ...)
+
+    - target batch: the expected output. It can be:
+        - a tensor of shape (batch_size, ...)
+        - a list/tuple of tensors, each of shape (batch_size, ...)
+
+From these batch definitions, one can define:
+
+    - input: each of the items of an input batch. Thus, 
+        - if the input batch is a (batch_size, N_1,...,N_D) tensor, then
+            the inputs are tensors of shape (N_1,...,N_D). The entries of
+            these tensors are referred to as "features".
+        - if the input batch is a list/tuple of tensors, each of shape
+            (batch_size, N_1,...,N_D), then the inputs are lists/tuples of
+            tensors, each of shape (N_1,...,N_D). The entries of these
+            tensors are referred to as "features". 
+        
+    - output: Defined likewise. The entries of the output are referred to
+        as "predictions".
+        
+    - target: defined similarly. The entries of the target are referred to as
+        "targets entries".
+        
+Notes: 
+    - In the past, the term "features" was used to refer to "input".
+        However, since this is plural, we did not have a way of referring
+        to multiple inputs besides `feature batch`. The term `feature
+        batch` only applied to the case where the inputs formed a batch.
+        So, if one wanted to refer to a collection of inputs (e.g. a
+        dataset), one would have to say `a collection of num_feat
+        features`, which was confusing since it seemed to refer to the
+        entries of an input. 
+
+
+"""
 
 gsim_logger = logging.getLogger("gsim")
 
+InputType = TypeVar("InputType", torch.Tensor, list[torch.Tensor],
+                    tuple[torch.Tensor, ...])
+OutputType = TypeVar("OutputType", torch.Tensor, list[torch.Tensor],
+                     tuple[torch.Tensor, ...])
+TargetType = TypeVar("TargetType", torch.Tensor, list[torch.Tensor],
+                     tuple[torch.Tensor, ...])
 
-class Normalizer(ABC):
+InputBatchType = TypeVar("InputBatchType", torch.Tensor, list[torch.Tensor],
+                         tuple[torch.Tensor, ...])
+OutputBatchType = TypeVar("OutputBatchType", torch.Tensor, list[torch.Tensor],
+                          tuple[torch.Tensor, ...])
+TargetBatchType = TypeVar("TargetBatchType", torch.Tensor, list[torch.Tensor],
+                          tuple[torch.Tensor, ...])
+
+
+class Normalizer(ABC, Generic[InputBatchType, OutputBatchType,
+                              TargetBatchType]):
 
     l_params_to_save = [
     ]  # List the attributes to be saved/loaded in this list
@@ -37,32 +97,32 @@ class Normalizer(ABC):
         Training: 
         - - - - -
 
-                           ┌───┐      ┌─────────┐  predictions  ┌──────┐
-           ┌-> features -> │ 1 │ ---> | forward | ---┬--------->| loss |-----> normalized loss
-           |               └───┘      └─────────┘    |    ┌─--->|      | 
-           |                                         |    |     └──────┘
-        Dataset                                      |    |
-           |                                         |    |     ┌───┐    
-           |                                         └--------->| 3 |---┐   ┌──────┐
-           |                                              |     └───┘   └-->|      |
-           |                            ┌───┐             |                 | loss |---> unnormalized loss
-           └-> targets  ----------------| 2 |-------------|     ┌───┐   ┌─->|      |
-                                        └───┘             └-----| 4 |---┘   └──────┘
-                                                                └───┘
+                             ┌───┐      ┌─────────┐  pred batch   ┌──────┐
+           ┌-> input batch-> │ 1 │ ---> | forward | ---┬--------->| loss |-----> normalized loss
+           |                 └───┘      └─────────┘    |    ┌─--->|      | 
+           |                                           |    |     └──────┘
+        Dataset                                        |    |
+           |                                           |    |     ┌───┐    
+           |                                           └--------->| 3 |---┐   ┌──────┐
+           |                                                |     └───┘   └-->|      |
+           |                              ┌───┐             |                 | loss |---> unnormalized loss
+           └-> target batch --------------| 2 |-------------|     ┌───┐   ┌─->|      |
+                                          └───┘             └-----| 4 |---┘   └──────┘
+                                                                  └───┘
         
         Prediction:
         - - - - - -
-                           ┌───┐      ┌─────────┐  predictions  ┌───┐        unnormalized 
-               features -> │ 1 │ ---> | forward | ------------->| 3 |----->  predictions
+                           ┌───┐      ┌─────────┐  pred batch   ┌───┐        unnormalized 
+            input batch -> │ 1 │ ---> | forward | ------------->| 3 |----->  predictions
                            └───┘      └─────────┘               └───┘
         
         Legend:        
         - - - -
         
-        1. normalize_feats_batch      |
+        1. normalize_input_batch      |
         2. normalize_targets_batch    | -> NeuralNet.collate_fn
         
-        3. unnormalize_preds_batch    |
+        3. unnormalize_output_batch   |
         4. unnormalize_targets_batch  | -> NeuralNet.make_unnormalized_loss
 
         
@@ -121,85 +181,88 @@ class Normalizer(ABC):
         return os.path.join(self.nn_folder, "normalizer.pk")
 
     @abstractmethod
-    def normalize_feats_batch(self, t_feats: torch.Tensor) -> torch.Tensor:
+    def normalize_input_batch(self,
+                              input_batch: InputBatchType) -> InputBatchType:
         """
         Args:
 
-            `t_feats`: batch_size x ... (feature tensor)
+            `input_batch`: batch_size x ... (input tensor)
 
         Returns:
 
-            normalized features tensor of same shape as `t_feats`.
+            normalized input tensor of same shape as `input_batch`.
 
         """
         pass
 
     @abstractmethod
-    def normalize_targets_batch(self, t_targets: torch.Tensor) -> torch.Tensor:
+    def normalize_targets_batch(
+            self, targets_batch: TargetBatchType) -> TargetBatchType:
         """
         Args:
 
-            `t_targets`: batch_size x ... (target tensor)
+            `targets_batch`: batch_size x ... (target tensor)
 
         Returns:
-            normalized targets tensor of same shape as `t_targets`.
+            normalized targets tensor of same shape as `targets_batch`.
         """
         pass
 
     @abstractmethod
-    def unnormalize_preds_batch(self, t_preds: torch.Tensor) -> torch.Tensor:
+    def unnormalize_output_batch(
+            self, output_batch: OutputBatchType) -> OutputBatchType:
         """
         Args:
 
-            `t_preds`: batch_size x ... (predictions tensor)
+            `output_batch`: batch_size x ... (predictions tensor)
 
         Returns:
-            unnormalized predictions tensor of same shape as `t_preds`.
+            unnormalized predictions tensor of same shape as `output_batch`.
 
         """
         pass
 
     @abstractmethod
-    def unnormalize_targets_batch(self,
-                                  t_targets: torch.Tensor) -> torch.Tensor:
+    def unnormalize_targets_batch(
+            self, targets_batch: TargetBatchType) -> TargetBatchType:
         """
         Args:
 
-            `t_targets`: batch_size x ... (target tensor)
+            `targets_batch`: batch_size x ... (target tensor)
 
         Returns:
-            unnormalized targets tensor of same shape as `t_targets`.
+            unnormalized targets tensor of same shape as `targets_batch`.
 
         """
         pass
 
     def normalize_example_batch(
-            self, l_batch: list[torch.Tensor]) -> list[torch.Tensor]:
+        self, l_batch: tuple[InputBatchType, TargetBatchType]
+    ) -> tuple[InputBatchType, TargetBatchType]:
         """
-        In datasets formed of pairs (features, targets), batch is a
+        In datasets formed by pairs (input, targets), batch is a
         list of length 2. The first element of this list is a batch
-        of features, and the second element is a batch of targets.
+        of input, and the second element is a batch of targets.
         """
 
-        t_feats, t_targets = l_batch
-        return [
-            self.normalize_feats_batch(t_feats),
-            self.normalize_targets_batch(t_targets)
-        ]
+        input_batch, targets_batch = l_batch
+        return (self.normalize_input_batch(input_batch),
+                self.normalize_targets_batch(targets_batch))
 
 
-class DefaultNormalizer(Normalizer):
+class DefaultNormalizer(Normalizer[torch.Tensor, torch.Tensor, torch.Tensor]):
 
     l_params_to_save = [
-        "t_feats_mean", "t_feats_std", "t_targets_mean", "t_targets_std"
+        "input_batch_mean", "input_batch_std", "targets_batch_mean",
+        "targets_batch_std"
     ]
 
     def __init__(self, mode: str, **kwargs):
         """
-        This normalizer is to be used with datasets of pairs (features, targets). 
+        This normalizer is to be used with datasets of pairs (input, targets). 
 
-        This class separately normalizes each entry of the features and targets.
-        For example, if the features are an M x N matrix, then normalization
+        This class separately normalizes each entry of the input and targets.
+        For example, if the input are an M x N matrix, then normalization
         will subtract a mean M x N matrix obtained by averaging the feature
         matrices in the dataset and will divide by the standard deviation M x N
         matrix obtained likewise. 
@@ -208,9 +271,9 @@ class DefaultNormalizer(Normalizer):
 
             `mode`: can be
                 - "none": no normalization
-                - "features": normalize only the features
+                - "input": normalize only the input
                 - "targets": normalize only the targets
-                - "both": normalize both features and targets
+                - "both": normalize both input and targets
 
             `nn_folder`: if not None, the statistics of the normalization are
             loaded from this folder. When training, the statistics are saved in
@@ -219,15 +282,14 @@ class DefaultNormalizer(Normalizer):
         """
 
         super().__init__(**kwargs)
-        assert mode in [
-            "features", "targets", "both"
-        ], 'mode must be one of "features", "targets", or "both".'
+        assert mode in ["input", "targets", "both"
+                        ], 'mode must be one of "input", "targets", or "both".'
         self.mode = mode
 
-        self.t_feats_mean = None  # same shape as the features
-        self.t_feats_std = None  # same shape as the features
-        self.t_targets_mean = None  # same shape as the targets
-        self.t_targets_std = None  # same shape as the targets
+        self.input_batch_mean = None  # same shape as the input
+        self.input_batch_std = None  # same shape as the input
+        self.targets_batch_mean = None  # same shape as the targets
+        self.targets_batch_std = None  # same shape as the targets
 
     def fit(self, dataset: Dataset):
 
@@ -247,90 +309,93 @@ class DefaultNormalizer(Normalizer):
                 "Dataset must return pairs (t_input, t_target) when indexed.")
 
         # Initializations
-        t_feats, t_targets = example
-        if self.mode in ["features", "both"]:
-            self.t_feats_mean = torch.zeros_like(t_feats)
+        input_batch, targets_batch = example
+        if self.mode in ["input", "both"]:
+            self.input_batch_mean = torch.zeros_like(input_batch)
         if self.mode in ["targets", "both"]:
-            self.t_targets_mean = torch.zeros_like(t_targets)
-        t_features_var = torch.zeros_like(t_feats)
-        t_targets_var = torch.zeros_like(t_targets)
+            self.targets_batch_mean = torch.zeros_like(targets_batch)
+        t_input_var = torch.zeros_like(input_batch)
+        targets_batch_var = torch.zeros_like(targets_batch)
 
         with torch.no_grad():
             # Estimate the mean matrices
             for ind_example in range(num_examples):
-                t_feats, t_targets = dataset[ind_example]
-                if self.mode in ["features", "both"]:
-                    self.t_feats_mean += t_feats / num_examples
+                input_batch, targets_batch = dataset[ind_example]
+                if self.mode in ["input", "both"]:
+                    self.input_batch_mean += input_batch / num_examples
                 if self.mode in ["targets", "both"]:
-                    self.t_targets_mean += t_targets / num_examples
+                    self.targets_batch_mean += targets_batch / num_examples
 
             # Estimate the standard deviation matrices
             for ind_example in range(num_examples):
-                t_feats, t_targets = dataset[ind_example]
-                if self.mode in ["features", "both"]:
-                    t_features_var += (t_feats -
-                                       self.t_feats_mean)**2 / num_examples
+                input_batch, targets_batch = dataset[ind_example]
+                if self.mode in ["input", "both"]:
+                    t_input_var += (input_batch -
+                                    self.input_batch_mean)**2 / num_examples
                 if self.mode in ["targets", "both"]:
-                    t_targets_var += (t_targets -
-                                      self.t_targets_mean)**2 / num_examples
+                    targets_batch_var += (
+                        targets_batch -
+                        self.targets_batch_mean)**2 / num_examples
 
-            if self.mode in ["features", "both"]:
-                self.t_feats_std = torch.sqrt(t_features_var)
+            if self.mode in ["input", "both"]:
+                self.input_batch_std = torch.sqrt(t_input_var)
                 # Avoid division by zero
-                self.t_feats_std[self.t_feats_std == 0] = 1.0
+                self.input_batch_std[self.input_batch_std == 0] = 1.0
             if self.mode in ["targets", "both"]:
-                self.t_targets_std = torch.sqrt(t_targets_var)
+                self.targets_batch_std = torch.sqrt(targets_batch_var)
                 # Avoid division by zero
-                self.t_targets_std[self.t_targets_std == 0] = 1.0
+                self.targets_batch_std[self.targets_batch_std == 0] = 1.0
 
-    def normalize_feats_batch(self, t_feats: torch.Tensor) -> torch.Tensor:
+    def normalize_input_batch(self, input_batch: torch.Tensor) -> torch.Tensor:
         """
         Args:
 
-            `t_feats`: shape (batch_size, *feats_shape)
+            `input_batch`: shape (batch_size, *feats_shape)
 
         """
-        if self.mode in ["features", "both"]:
-            assert self.t_feats_mean is not None and self.t_feats_std is not None, "The normalizer has not been fitted or loaded from a file."
-            return (t_feats -
-                    self.t_feats_mean[None, ...]) / self.t_feats_std[None, ...]
-        return t_feats
+        if self.mode in ["input", "both"]:
+            assert self.input_batch_mean is not None and self.input_batch_std is not None, "The normalizer has not been fitted or loaded from a file."
+            return (input_batch - self.input_batch_mean[None, ...]
+                    ) / self.input_batch_std[None, ...]
+        return input_batch
 
-    def normalize_targets_batch(self, t_targets: torch.Tensor) -> torch.Tensor:
+    def normalize_targets_batch(self,
+                                targets_batch: torch.Tensor) -> torch.Tensor:
         """
         Args:
 
-            `t_targets`: shape (batch_size, *targets_shape)
+            `targets_batch`: shape (batch_size, *targets_shape)
 
         """
         if self.mode in ["targets", "both"]:
-            assert self.t_targets_mean is not None and self.t_targets_std is not None, "The normalizer has not been fitted or loaded from a file."
-            return (t_targets - self.t_targets_mean[None, ...]
-                    ) / self.t_targets_std[None, ...]
-        return t_targets
+            assert self.targets_batch_mean is not None and self.targets_batch_std is not None, "The normalizer has not been fitted or loaded from a file."
+            return (targets_batch - self.targets_batch_mean[None, ...]
+                    ) / self.targets_batch_std[None, ...]
+        return targets_batch
 
     def unnormalize_targets_batch(self,
-                                  t_targets: torch.Tensor) -> torch.Tensor:
+                                  targets_batch: torch.Tensor) -> torch.Tensor:
         """
         Args:
 
-            `t_targets`: shape (batch_size, *targets_shape)
+            `targets_batch`: shape (batch_size, *targets_shape)
 
         """
         if self.mode in ["targets", "both"]:
-            assert self.t_targets_mean is not None and self.t_targets_std is not None, "The normalizer has not been fitted or loaded from a file."
-            return t_targets.to("cpu") * self.t_targets_std[
-                None, ...] + self.t_targets_mean[None, ...]
-        return t_targets
+            assert self.targets_batch_mean is not None and self.targets_batch_std is not None, "The normalizer has not been fitted or loaded from a file."
+            return targets_batch.to("cpu") * self.targets_batch_std[
+                None, ...] + self.targets_batch_mean[None, ...]
+        return targets_batch
 
-    def unnormalize_preds_batch(self, t_preds: torch.Tensor) -> torch.Tensor:
+    def unnormalize_output_batch(self,
+                                 output_batch: torch.Tensor) -> torch.Tensor:
         """
         Args:
 
-            `t_preds`: shape (batch_size, *targets_shape)
+            `output_batch`: shape (batch_size, *targets_shape)
 
         """
-        return self.unnormalize_targets_batch(t_preds)
+        return self.unnormalize_targets_batch(output_batch)
 
 
 class LossLandscapeConfig():
@@ -360,14 +425,6 @@ class LossLandscapeConfig():
         self.max_num_directions = max_num_directions
 
 
-InputType = TypeVar("InputType", torch.Tensor, list[torch.Tensor],
-                    tuple[torch.Tensor, ...])
-OutputType = TypeVar("OutputType", torch.Tensor, list[torch.Tensor],
-                     tuple[torch.Tensor, ...])
-TargetType = TypeVar("TargetType", torch.Tensor, list[torch.Tensor],
-                     tuple[torch.Tensor, ...])
-
-
 class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
 
     _initialized = False
@@ -379,47 +436,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
                  device_type: Union[None, str] = None,
                  **kwargs):
         """
-        Terminology:
-
-            - input batch: argument of `self.forward`. It can be:
-                - a tensor of shape (batch_size, ...)
-                - a list/tuple of tensors, each of shape (batch_size, ...)
-
-            - output batch: what `self.forward` returns. It can be:
-                - a tensor of shape (batch_size, ...)
-                - a list/tuple of tensors, each of shape (batch_size, ...)
-
-            - target batch: the expected output. It can be:
-                - a tensor of shape (batch_size, ...)
-                - a list/tuple of tensors, each of shape (batch_size, ...)
-
-        From these batch definitions, one can define:
-
-            - input: each of the items of an input batch. Thus, 
-                - if the input batch is a (batch_size, N_1,...,N_D) tensor, then
-                  the inputs are tensors of shape (N_1,...,N_D). The entries of
-                  these tensors are referred to as "features".
-                - if the input batch is a list/tuple of tensors, each of shape
-                  (batch_size, N_1,...,N_D), then the inputs are lists/tuples of
-                  tensors, each of shape (N_1,...,N_D). The entries of these
-                  tensors are referred to as "features". 
-              
-            - output: Defined likewise. The entries of the output are referred to
-              as "predictions".
-             
-            - target: defined similarly. The entries of the target are referred to as
-              "targets entries".
-                
-        Notes: 
-            - In the past, the term "features" was used to refer to "input".
-              However, since this is plural, we did not have a way of referring
-              to multiple inputs besides `feature batch`. The term `feature
-              batch` only applied to the case where the inputs formed a batch.
-              So, if one wanted to refer to a collection of inputs (e.g. a
-              dataset), one would have to say `a collection of num_feat
-              features`, which was confusing since it seemed to refer to the
-              entries of an input. 
-
+        
         Args: 
 
             `nn_folder`: if not None, the weights of the network are loaded from
@@ -430,12 +447,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         
             `normalizer`: can be
                 - None: no normalization
-                - "features": normalize only the features
+                - "input": normalize only the input
                 - "targets": normalize only the targets
-                - "both": normalize both features and targets            
+                - "both": normalize both input and targets            
                 - an instance of Normalizer: use the provided normalizer
-            The options "features", "targets", and "both" can be selected only
-            when the dataset comprises pairs of (features, targets). For other
+            The options "input", "targets", and "both" can be selected only
+            when the dataset comprises pairs of (input, targets). For other
             dataset forms, writing a custom Normalizer is required. 
 
         """
@@ -559,14 +576,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         # Override if needed
         return example
 
-    def collate_and_normalize(self, l_batch, only_inputs=False):
+    def collate_and_normalize(self, l_batch, no_targets=False):
         """
         Args:
             
             l_batch' is typ. a list of batch_size pairs (inputs, targets) or
             only inputs.
 
-            'only_inputs' (bool): If True, the batch contains only inputs.
+            'no_targets' (bool): If True, the batch contains only inputs.
             Else, it contains both inputs and targets.
 
         """
@@ -574,8 +591,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         l_batch = self.collate_fn(l_batch)
         # After collation, l_batch is typ. a list of tensors (feats_batch, targets_batch)
         if self.normalizer is not None:
-            if only_inputs:
-                l_batch = self.normalizer.normalize_feats_batch(l_batch)
+            if no_targets:
+                l_batch = self.normalizer.normalize_input_batch(l_batch)
             else:
                 l_batch = self.normalizer.normalize_example_batch(l_batch)
         return l_batch
@@ -584,7 +601,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         normalizer = self.normalizer
         assert normalizer is not None
         return lambda pred, target: f_loss(
-            normalizer.unnormalize_preds_batch(pred),
+            normalizer.unnormalize_output_batch(pred),
             normalizer.unnormalize_targets_batch(target),
         )
 
@@ -592,8 +609,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         """
         Args:
 
-            `data`: typ. a tuple of two elements. The first is a list of
-            batch_size features and the second a list of batch_size targets. 
+            `data`: typ. a tuple of two elements. The first is an input batch
+            and the second a target batch. 
 
         If `unnormalize` is True, the unnormalized loss is returned. This is
         just the result of
@@ -781,7 +798,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
         data_loader = self.make_data_loader(
             dataset,
             batch_size=batch_size,
-            only_features=not dataset_includes_targets)
+            no_targets=not dataset_includes_targets)
         l_out = []
         self.eval()
         for batch in data_loader:
@@ -792,7 +809,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
             feat_batch = self._move_to_device(feat_batch)
             preds_batch = self._move_to_cpu(self(feat_batch))
             if unnormalize and self.normalizer is not None:
-                preds_batch = self.normalizer.unnormalize_preds_batch(
+                preds_batch = self.normalizer.unnormalize_output_batch(
                     preds_batch)
 
             # l_out is a list of batches
@@ -832,12 +849,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
                          dataset,
                          batch_size,
                          shuffle=None,
-                         only_features=False):
+                         no_targets=False):
         """
         Args:
         
-            'only_features' (bool): If True, the batch contains only features.
-            Else, it contains both features and targets.
+            'no_targets' (bool): If True, the batch contains only inputs.
+            Else, it contains both inputs and targets.
 
         """
         return DataLoader(
@@ -845,7 +862,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
             batch_size=batch_size,
             shuffle=shuffle,
             collate_fn=lambda l_batch: self.collate_and_normalize(
-                l_batch, only_inputs=only_features))
+                l_batch, no_targets=no_targets))
 
     def fit(self,
             dataset: Dataset,
