@@ -4,7 +4,7 @@ import pickle
 import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Sized
-from typing import Union
+from typing import Callable, Generic, TypeVar, Union
 
 import numpy as np
 import torch
@@ -360,7 +360,15 @@ class LossLandscapeConfig():
         self.max_num_directions = max_num_directions
 
 
-class NeuralNet(nn.Module):
+InputType = TypeVar("InputType", torch.Tensor, list[torch.Tensor],
+                    tuple[torch.Tensor, ...])
+OutputType = TypeVar("OutputType", torch.Tensor, list[torch.Tensor],
+                     tuple[torch.Tensor, ...])
+TargetType = TypeVar("TargetType", torch.Tensor, list[torch.Tensor],
+                     tuple[torch.Tensor, ...])
+
+
+class NeuralNet(nn.Module, Generic[InputType, OutputType], ABC):
 
     _initialized = False
 
@@ -371,7 +379,47 @@ class NeuralNet(nn.Module):
                  device_type: Union[None, str] = None,
                  **kwargs):
         """
-        
+        Terminology:
+
+            - input batch: argument of `self.forward`. It can be:
+                - a tensor of shape (batch_size, ...)
+                - a list/tuple of tensors, each of shape (batch_size, ...)
+
+            - output batch: what `self.forward` returns. It can be:
+                - a tensor of shape (batch_size, ...)
+                - a list/tuple of tensors, each of shape (batch_size, ...)
+
+            - target batch: the expected output. It can be:
+                - a tensor of shape (batch_size, ...)
+                - a list/tuple of tensors, each of shape (batch_size, ...)
+
+        From these batch definitions, one can define:
+
+            - input: each of the items of an input batch. Thus, 
+                - if the input batch is a (batch_size, N_1,...,N_D) tensor, then
+                  the inputs are tensors of shape (N_1,...,N_D). The entries of
+                  these tensors are referred to as "features".
+                - if the input batch is a list/tuple of tensors, each of shape
+                  (batch_size, N_1,...,N_D), then the inputs are lists/tuples of
+                  tensors, each of shape (N_1,...,N_D). The entries of these
+                  tensors are referred to as "features". 
+              
+            - output: Defined likewise. The entries of the output are referred to
+              as "predictions".
+             
+            - target: defined similarly. The entries of the target are referred to as
+              "targets entries".
+                
+        Notes: 
+            - In the past, the term "features" was used to refer to "input".
+              However, since this is plural, we did not have a way of referring
+              to multiple inputs besides `feature batch`. The term `feature
+              batch` only applied to the case where the inputs formed a batch.
+              So, if one wanted to refer to a collection of inputs (e.g. a
+              dataset), one would have to say `a collection of num_feat
+              features`, which was confusing since it seemed to refer to the
+              entries of an input. 
+
         Args: 
 
             `nn_folder`: if not None, the weights of the network are loaded from
@@ -445,6 +493,11 @@ class NeuralNet(nn.Module):
 
         self.to(device=self.device_type)
 
+    @abstractmethod
+    def forward(self, x: InputType) -> OutputType:
+        # This method must be overridden by subclasses
+        raise NotImplementedError
+
     def _assert_initialized(self):
         assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
 
@@ -453,26 +506,75 @@ class NeuralNet(nn.Module):
         # Override if needed
         return default_collate(*args, **kwargs)
 
+    def uncollate_fn(self, l_batches):
+        """            
+        Args:
+            'l_batches': a list of output batches. Recall from the
+            terminology above that output batches can be tensors, lists,
+            or tuples. 
+
+        Returns:
+            A list of outputs. Thus, 
+
+                - If the output batches are (batch_size, N_1,...,N_D)
+                    tensors, then the function returns a list of N tensors of
+                    shape (N_1,...,N_D), where N is the sum of the batch sizes.
+
+                - If the output batches are lists/tuples of (batch_size,
+                    N_1,...,N_D) tensors, then the function returns a list of
+                    N lists/tuples of tensors of shape (N_1,...,N_D).
+                    
+        """
+
+        if isinstance(l_batches[0], torch.Tensor):
+            return [
+                l_batches[ind_batch][ind_output]
+                for ind_batch in range(len(l_batches))
+                for ind_output in range(l_batches[ind_batch].size(0))
+            ]
+
+        elif isinstance(l_batches[0], (list, tuple)):
+            # If e.g.
+            #
+            #  l_batches = [ (T1,T2,T3), (T4,T5,T6), ... ]
+            #
+            # then we want to return
+            #
+            #  [ (T1[0], T2[0], T3[0]), (T1[1], T2[1], T3[1]), ..., (T1[B1-1], T2[B1-1], T3[B1-1]),
+            #   (T4[0], T5[0], T6[0]), (T4[1], T5[1], T6[1]), ..., (T4[B2-1], T5[B2-1], T6[B2-1]),
+            #  ... ]
+            #
+            return [
+                type(l_batches[0])(
+                    l_batches[ind_batch][ind_output_tensor][ind_output]
+                    for ind_output_tensor in range(len(l_batches[ind_batch])))
+                for ind_batch in range(len(l_batches))
+                for ind_output in range(len(l_batches[ind_batch][0]))
+            ]
+
+        else:
+            raise TypeError(f"Unsupported batch type: {type(l_batches[0])}")
+
     def normalize(self, example):
         # Override if needed
         return example
 
-    def collate_and_normalize(self, l_batch, only_features=False):
+    def collate_and_normalize(self, l_batch, only_inputs=False):
         """
         Args:
             
-            l_batch' is typ. a list of batch_size pairs (features, targets) or
-            only features.
+            l_batch' is typ. a list of batch_size pairs (inputs, targets) or
+            only inputs.
 
-            'only_features' (bool): If True, the batch contains only features.
-            Else, it contains both features and targets.
+            'only_inputs' (bool): If True, the batch contains only inputs.
+            Else, it contains both inputs and targets.
 
         """
 
         l_batch = self.collate_fn(l_batch)
         # After collation, l_batch is typ. a list of tensors (feats_batch, targets_batch)
         if self.normalizer is not None:
-            if only_features:
+            if only_inputs:
                 l_batch = self.normalizer.normalize_feats_batch(l_batch)
             else:
                 l_batch = self.normalizer.normalize_example_batch(l_batch)
@@ -571,77 +673,91 @@ class NeuralNet(nn.Module):
 
     class NeuralNetDataset(Dataset):
 
-        def __init__(self, l_preds):
+        def __init__(self, l_preds: list[InputType] | torch.Tensor
+                     | tuple[InputType] | list[InputType]):
             self.l_preds = l_preds
 
         def __len__(self):
-            return len(self.l_preds)
+            return len(self.l_preds)  # type: ignore
 
         def __getitem__(self, idx):
             return self.l_preds[idx]
 
     def predict(self,
-                data: Union[tuple, list, torch.Tensor, Dataset],
+                data: Union[torch.Tensor, tuple[InputType], list[InputType],
+                            Dataset],
                 batch_size=32,
                 unnormalize=True,
-                data_includes_targets=False,
-                output_class: None | tuple | list | torch.Tensor
-                | Dataset = None):
+                dataset_includes_targets=False,
+                output_class: None | type[torch.Tensor] | type[list]
+                | type[tuple] | type[Dataset] = None):
         """
+
+        Note: The terminology in __init__ is used below.
 
         Args:
-            'data': A tuple/list/Tensor/Dataset whose items are:
-                - features (input of self.forward), if data_includes_targets is
-                  False.
+            'data': contains a collection of N inputs. It can be:
 
-                - pairs (features, targets) if data_includes_targets is True
+                - A tensor of shape (N, ...).
+
+                - A tuple/list of length N. Note that, since each item is an
+                  input, it can be itself a tensor, a tuple, or a list.
+
+                - A Dataset. 
+                    - If `dataset_includes_targets` is False, the Dataset
+                      contains N inputs, i.e., dataset[n] is the n-th input.
+                    - If `dataset_includes_targets` is True, the Dataset
+                      contains N pairs (input, target), i.e., dataset[n][0] is
+                      the n-th input. 
+
+            `unnormalize`: if True, the outputs are unnormalized before being
+            returned.
 
         Returns:
-            The predictions in an object of class 'output_class'. If
+            The outputs in an object of class 'output_class'. If
         'output_class' is None, it is set to type('data').
-        
-        If `unnormalize` is True, the unnormalized predictions are returned.
+
+            - If `output_class==torch.Tensor`, then the output is an (N, ...)
+              tensor provided that the output of the network is a tensor. If the
+              output of the network is a list/tuple of tensors, an exception is
+              raised.
+
+            - If `output_class==list` or `output_class==tuple`, then the output
+              is a list/tuple with the N outputs. Note that, since each item is
+              an output, it can be itself a tensor, a tuple, or a list.
+
+            - If `output_class==Dataset`, then the output is a Dataset with N
+              elements, where each element is the output for the corresponding
+              input.
 
         """
 
-        def uncollate(l_batches):
+        def make_output(l_out, output_class):
             """
-            #TODO: Finish writing and testing this
             Args:
-                'l_batches': a list of items with the same type and shape as the
-                output of self.forward.
+
+                'l_out': list of N outputs. Each output can be a tensor, a
+                list, or a tuple.
 
             Returns:
-                A list of predictions:
-                    - If the items are (batch_size x ...) tensors, then the
-                      function returns the concatenation of these tensors along
-                      the first axis.
-
-                    - If the items are lists or tuples of tensors of (batch_size x
-                    ...) tensors, then the function returns a list/tuple of the
-                    concatenated tensors.
+                An object of class 'output_class' containing the outputs.
+            
             """
 
-            if isinstance(l_batches[0], torch.Tensor):
-                return torch.cat(l_batches, dim=0)
-            elif isinstance(l_batches[0], (list, tuple)):
-                return type(l_batches[0])(torch.cat(batch, dim=0)
-                                          for batch in zip(*l_batches))
-            else:
-                raise TypeError(
-                    f"Unsupported batch type: {type(l_batches[0])}")
-
-        def make_output(l_out, output_class):
+            # Set the default output class
             if output_class is None:
                 output_class = Dataset if isinstance(data,
                                                      Dataset) else type(data)
 
-            if output_class == tuple:
+            if output_class == torch.Tensor:
+                assert isinstance(
+                    l_out[0], torch.Tensor
+                ), "If output_class is torch.Tensor, the output of the network must be a tensor."
+                return torch.stack(l_out, dim=0)
+            elif output_class == tuple:
                 return tuple(l_out)
             elif output_class == list:
                 return l_out
-            elif output_class == torch.Tensor:
-                return torch.cat(l_out, dim=0)
             elif output_class == Dataset:
                 return NeuralNet.NeuralNetDataset(l_out)
             else:
@@ -654,25 +770,34 @@ class NeuralNet(nn.Module):
                 "Cannot return normalized predictions if a normalizer is not set."
             )
         if not isinstance(data, Dataset):
+            dataset_includes_targets = False
             dataset = NeuralNet.NeuralNetDataset(data)
         else:
             dataset = data
+            if len(dataset) > 0:  # type: ignore
+                if dataset_includes_targets:
+                    assert (len(dataset[0]) == 2)  # type: ignore
 
         data_loader = self.make_data_loader(
             dataset,
             batch_size=batch_size,
-            only_features=not data_includes_targets)
+            only_features=not dataset_includes_targets)
         l_out = []
         self.eval()
         for batch in data_loader:
-            feat_batch = batch[0] if data_includes_targets else batch
+            # Ignore the targets if present
+            feat_batch = batch[0] if dataset_includes_targets else batch
+
+            # Run the forward pass
             feat_batch = self._move_to_device(feat_batch)
             preds_batch = self._move_to_cpu(self(feat_batch))
             if unnormalize and self.normalizer is not None:
                 preds_batch = self.normalizer.unnormalize_preds_batch(
                     preds_batch)
+
+            # l_out is a list of batches
             l_out.append(preds_batch)
-        return make_output(uncollate(l_out), output_class)
+        return make_output(self.uncollate_fn(l_out), output_class)
 
     @property
     def weight_file_path(self):
@@ -720,13 +845,13 @@ class NeuralNet(nn.Module):
             batch_size=batch_size,
             shuffle=shuffle,
             collate_fn=lambda l_batch: self.collate_and_normalize(
-                l_batch, only_features=only_features))
+                l_batch, only_inputs=only_features))
 
     def fit(self,
             dataset: Dataset,
             optimizer,
             num_epochs,
-            f_loss=None,
+            f_loss: Callable,
             dataset_val=None,
             batch_size=32,
             batch_size_eval=None,
@@ -752,8 +877,7 @@ class NeuralNet(nn.Module):
 
         Args:
 
-         `f_loss`: f_loss(pred,targets) where pred.shape[0] =
-            targets.shape[0] = batch_size is a vector of length batch_size.
+         `f_loss`: f_loss(output_batch,target_batch) 
 
           `batch_size_eval` is the batch size used to evaluate the loss. If
           None, `batch_size` is used also for evaluation.
@@ -1035,7 +1159,8 @@ class NeuralNet(nn.Module):
 
         best_train_loss = torch.inf
         #num_epochs_left_to_expire_patience = patience
-        num_epochs_left_to_expire_lr_patience = lr_patience
+        num_epochs_left_to_expire_lr_patience = lr_patience if isinstance(
+            lr_patience, int) else 0
         best_train_loss_state_folder, best_val_loss_state_folder = get_train_val_state_folder_paths(
         )
 
@@ -1103,7 +1228,8 @@ class NeuralNet(nn.Module):
                     save_optimizer_state(
                         self.get_optimizer_state_file_path(
                             best_train_loss_state_folder))
-                    num_epochs_left_to_expire_lr_patience = lr_patience
+                    num_epochs_left_to_expire_lr_patience = lr_patience if isinstance(
+                        lr_patience, int) else 0
                 else:
                     if lr_patience:
                         num_epochs_left_to_expire_lr_patience -= 1
