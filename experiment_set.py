@@ -81,9 +81,10 @@ class AbstractExperimentSet:
                                           inspect=inspect)
 
         else:
-            raise ValueError(
+            gsim_logger.error(
                 f"Experiment not found: Class {cls.__name__} in module {cls.__module__} contains no function called {f_name}."
             )
+            quit()
 
     @classmethod
     def _plot_list_of_GFigure(cls,

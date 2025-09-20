@@ -13,8 +13,10 @@ More information in gsim/install.sh
 
 """
 
-# Select an experiment file:
+# Select a fallback experiment file and experiment index, in case they are not
+# specified on the command line:
 module_name = "experiments.example_experiments"
+default_experiment_index = 1001
 
 # GFigure
 import gsim.gfigure

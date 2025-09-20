@@ -35,11 +35,35 @@ import gsim
 import gsim_conf
 
 
-def load_modules():
+def process_module_name(module_name):
+
+    if module_name.endswith('.py'):
+        module_name = module_name[:-3]
+
+    current_dir = os.path.basename(os.getcwd())
+    experiment_dir = current_dir
+
+    module_rel_path = os.path.join(*module_name.split('.')) + '.py'
+
+    if not os.path.exists(os.path.join(module_rel_path)):
+        if not os.path.exists(os.path.join('experiments', module_rel_path)):
+            gsim_logger.error(
+                f"The experiment module {module_name} was not found in the current directory or in the experiments subfolder."
+            )
+            quit()
+        experiment_dir = current_dir + '.' + 'experiments'
+
+    module_name_with_package = f"{experiment_dir}.{module_name}"
+    return module_name_with_package
+
+
+def load_modules(experiment_module=None):
     gsim_logger.info("Loading modules...")
     # Import the module with the proper package context so relative imports work
-    current_dir = os.path.basename(os.getcwd())
-    module_name_with_package = f"{current_dir}.{gsim_conf.module_name}"
+
+    module_name = experiment_module or gsim_conf.module_name
+    module_name_with_package = process_module_name(module_name)
+    gsim_logger.info(f"Loading experiments from {module_name_with_package}...")
     module = importlib.import_module(module_name_with_package)
     ExperimentSet = getattr(module, "ExperimentSet")
     gsim_logger.info("Finished loading modules.")
@@ -54,7 +78,18 @@ if __name__ == '__main__':
         description=
         "Run the experiment function with index <experiment_index> in the module specified in gsim_conf.py."
     )
-    parser.add_argument('experiment_index')
+    parser.add_argument(
+        '-x',
+        '--xmod',
+        help='Select the experiment module (e.g. example_experiments).',
+        default=None)
+    parser.add_argument(
+        'experiment_index',
+        nargs='?',
+        default=None,
+        help=
+        'Index (ID) of experiment to run; optional, falls back to gsim_conf.default_experiment_index if omitted.'
+    )
     parser.add_argument(
         'experiment_args',
         nargs='*',
@@ -80,7 +115,7 @@ if __name__ == '__main__':
     parser.add_argument('-g', '--gpu', help='Select the GPU.', default=None)
 
     args, unknown_args = parser.parse_known_args()
-    ExperimentSet = load_modules()
+    ExperimentSet = load_modules(args.xmod)
     if len(unknown_args):
         print('WARNING: The following arguments were not recognized:')
         print(unknown_args)
@@ -93,8 +128,10 @@ if __name__ == '__main__':
             print("The following arguments will be passed to the experiment:")
         print(args.experiment_args)
 
+    experiment_index = args.experiment_index or gsim_conf.default_experiment_index
+
     if args.plot_only:
-        ExperimentSet.plot_only(args.experiment_index,
+        ExperimentSet.plot_only(experiment_index,
                                 save_pdf=args.export,
                                 inspect=args.inspect)
     else:
@@ -102,7 +139,7 @@ if __name__ == '__main__':
             os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
             os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
-        ExperimentSet.run_experiment(args.experiment_index,
+        ExperimentSet.run_experiment(experiment_index,
                                      args.experiment_args,
                                      save_pdf=args.export,
                                      inspect=args.inspect)
