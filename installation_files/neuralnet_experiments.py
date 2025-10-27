@@ -10,8 +10,7 @@ try:
     from torch import nn
     from torch.utils.data import DataLoader, Dataset, Subset, random_split
 except ImportError:
-    raise ValueError(
-        "PyTorch is not installed. This experiment requires PyTorch.")
+    raise ValueError("PyTorch is not installed. This experiment requires PyTorch.")
 
 from tqdm import tqdm
 
@@ -30,9 +29,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             def __init__(self, num_examples):
                 self.num_examples = num_examples
                 self.m_feat = torch.randn(num_examples, 2)
-                self.m_targets = torch.sum(
-                    self.m_feat, dim=1,
-                    keepdim=True) + 0.5 * torch.randn(num_examples, 1)
+                self.m_targets = torch.sum(self.m_feat, dim=1,
+                                           keepdim=True) + 0.5 * torch.randn(num_examples, 1)
 
             def __len__(self):
                 return self.num_examples
@@ -53,8 +51,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         dataset = ExampleDataset(1000)
         net = ExampleNet()
 
-        f_loss = lambda m_pred, m_targets: torch.mean(
-            (m_targets - m_pred)**2, dim=1)
+        f_loss = lambda m_pred, m_targets: torch.mean((m_targets - m_pred)**2, dim=1)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
         d_training_history = net.fit(dataset,
@@ -83,8 +80,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             @staticmethod
             def target_fun(m_feat: torch.Tensor) -> torch.Tensor:
                 # m_feat is num_examples x 20
-                m_feat = (m_feat[:, :10] -
-                          300)**2 / 10 + 0.5 * m_feat[:, 10:] + 20
+                m_feat = (m_feat[:, :10] - 300)**2 / 10 + 0.5 * m_feat[:, 10:] + 20
                 return torch.sum(m_feat, dim=1, keepdim=True)
 
             def __len__(self):
@@ -94,9 +90,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                 return self.m_feat[ind], self.m_targets[ind]
 
         def plot_data_distribution(dataset: MyDataset) -> GFigure:
-            G = GFigure(xlabel="Feature value",
-                        ylabel="Histogram",
-                        num_subplot_columns=1)
+            G = GFigure(xlabel="Feature value", ylabel="Histogram", num_subplot_columns=1)
             G.add_histogram_curve(
                 data=dataset.m_feat.numpy().flatten(),
                 hist_args={
@@ -158,8 +152,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
 
         l_nets = [d_unnormalized, d_normalized]
 
-        f_loss = lambda m_pred, m_targets: torch.mean(
-            (m_targets - m_pred)**2, dim=1)
+        f_loss = lambda m_pred, m_targets: torch.mean((m_targets - m_pred)**2, dim=1)
 
         l_G = []
         for d_net in l_nets:
@@ -179,13 +172,10 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                 f_loss=f_loss,
                 eval_unnormalized_loss=True,
             )
-            d_net["metrics"] = net.evaluate(dataset,
-                                            batch_size=32,
-                                            f_loss=f_loss)
+            d_net["metrics"] = net.evaluate(dataset, batch_size=32, f_loss=f_loss)
             d_net["history"] = d_training_history
 
-            l_G_now: list[GFigure] = net.plot_training_history(
-                d_training_history)
+            l_G_now: list[GFigure] = net.plot_training_history(d_training_history)
             for G in l_G_now:
                 main_subplot = G.l_subplots[0]
                 if main_subplot:
@@ -202,29 +192,23 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         # Compare the losses of both networks
         first_epoch_to_plot = np.minimum(8, num_epochs)
         G = GFigure(xlabel="Epoch", ylabel="Loss")
-        G.add_curve(
-            xaxis=np.arange(first_epoch_to_plot, num_epochs),
-            yaxis=l_nets[0]["history"]["train_loss"][first_epoch_to_plot:],
-            legend=f"Unnormalized training loss of {l_nets[0]['name']}",
-            styles="b-")
-        G.add_curve(
-            xaxis=np.arange(first_epoch_to_plot, num_epochs),
-            yaxis=l_nets[0]["history"]["val_loss"][first_epoch_to_plot:],
-            legend=f"Unnormalized validation loss of {l_nets[0]['name']}",
-            styles="b--")
+        G.add_curve(xaxis=np.arange(first_epoch_to_plot, num_epochs),
+                    yaxis=l_nets[0]["history"]["train_loss"][first_epoch_to_plot:],
+                    legend=f"Unnormalized training loss of {l_nets[0]['name']}",
+                    styles="b-")
+        G.add_curve(xaxis=np.arange(first_epoch_to_plot, num_epochs),
+                    yaxis=l_nets[0]["history"]["val_loss"][first_epoch_to_plot:],
+                    legend=f"Unnormalized validation loss of {l_nets[0]['name']}",
+                    styles="b--")
         G.next_subplot(xlabel="Epoch", ylabel="Loss")
-        G.add_curve(
-            xaxis=np.arange(first_epoch_to_plot, num_epochs),
-            yaxis=l_nets[1]["history"]["unnormalized_train_loss"]
-            [first_epoch_to_plot:],
-            legend=f"Unnormalized training loss of {l_nets[1]['name']}",
-            styles="r-")
-        G.add_curve(
-            xaxis=np.arange(first_epoch_to_plot, num_epochs),
-            yaxis=l_nets[1]["history"]["unnormalized_val_loss"]
-            [first_epoch_to_plot:],
-            legend=f"Unnormalized validation loss of {l_nets[1]['name']}",
-            styles="r--")
+        G.add_curve(xaxis=np.arange(first_epoch_to_plot, num_epochs),
+                    yaxis=l_nets[1]["history"]["unnormalized_train_loss"][first_epoch_to_plot:],
+                    legend=f"Unnormalized training loss of {l_nets[1]['name']}",
+                    styles="r-")
+        G.add_curve(xaxis=np.arange(first_epoch_to_plot, num_epochs),
+                    yaxis=l_nets[1]["history"]["unnormalized_val_loss"][first_epoch_to_plot:],
+                    legend=f"Unnormalized validation loss of {l_nets[1]['name']}",
+                    styles="r--")
         l_G += [G]
         return l_G
 
@@ -237,8 +221,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             def __init__(self, num_examples, fun):
                 self.num_examples = num_examples
                 self.m_feat = 10 + 20 * torch.rand(num_examples, 1)
-                self.m_targets = fun(self.m_feat) + torch.randn(
-                    num_examples, 1)
+                self.m_targets = fun(self.m_feat) + torch.randn(num_examples, 1)
 
             def __len__(self):
                 return self.num_examples
@@ -269,8 +252,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         test_dataset = MyDataset(100, fun=fun)
         net = MyNet(normalizer="both", nn_folder=folder)
 
-        f_loss = lambda m_pred, m_targets: torch.mean(
-            (m_targets - m_pred)**2, dim=1)
+        f_loss = lambda m_pred, m_targets: torch.mean((m_targets - m_pred)**2, dim=1)
 
         optimizer = torch.optim.Adam(net.parameters(), lr=0.01)
         d_training_history = net.fit(train_dataset,
@@ -288,7 +270,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         net = MyNet(normalizer="both", nn_folder=folder)
 
         def plot_data():
-            preds = [float(p) for p in net.predict(test_dataset)[:, 0]]
+            preds = [float(p[0]) for p in net.predict(test_dataset, dataset_includes_targets=True)]
             feat = [float(data[0]) for data in test_dataset]
             true_target = [float(data[1]) for data in test_dataset]
 
