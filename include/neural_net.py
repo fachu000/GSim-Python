@@ -460,6 +460,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  nn_folder=None,
                  normalizer: Union[None, Normalizer, str] = None,
                  device_type: Union[None, str] = None,
+                 num_workers: int = 4,
                  **kwargs):
         """
         
@@ -490,6 +491,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             self.device_type = (
                 "cuda" if torch.cuda.is_available() else
                 "mps" if torch.backends.mps.is_available() else "cpu")
+        self.num_workers = num_workers
         gsim_logger.info(f"Using {self.device_type} device")
         if nn_folder is None:
             gsim_logger.warning(
@@ -895,6 +897,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             dataset,
             batch_size=batch_size,
             shuffle=shuffle,
+            num_workers=self.num_workers,
+            pin_memory=True,
             collate_fn=lambda l_batch: self.collate_and_normalize(
                 l_batch, no_targets=no_targets))
 
@@ -1179,6 +1183,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         # Fit the normalizer
         if self.normalizer is not None:
+            gsim_logger.info("Fitting the normalizer...")
             self.normalizer.fit(dataset_train)
             self.normalizer.save()
 
