@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import pickle
@@ -16,7 +17,7 @@ from tqdm import tqdm
 from gsim.gfigure import Subplot
 
 try:
-    from ...gsim import GFigure
+    from ....gsim import GFigure
 except ImportError:
     from gsim import GFigure
 """
@@ -893,14 +894,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             Else, it contains both inputs and targets.
 
         """
-        return DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=self.num_workers,
-            pin_memory=True,
-            collate_fn=lambda l_batch: self.collate_and_normalize(
-                l_batch, no_targets=no_targets))
+        return DataLoader(dataset,
+                          batch_size=batch_size,
+                          shuffle=shuffle,
+                          num_workers=self.num_workers,
+                          pin_memory=True,
+                          collate_fn=functools.partial(
+                              self.collate_and_normalize,
+                              no_targets=no_targets))
 
     def fit(self,
             dataset: Dataset,

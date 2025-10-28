@@ -5,6 +5,48 @@ from torch.utils.data import Dataset
 from gsim.include.neural_net import NeuralNet
 
 
+# Helper network definitions (defined at module level to be picklable)
+class _SimpleNetworkTensor(NeuralNet):
+    """Helper network for tensor input/output tests."""
+
+    def __init__(self):
+        super().__init__()
+        self.initialize()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: input tensor of shape (batch_size, M , N)
+        Returns:
+            output tensor of shape (batch_size, 2*M, 3*N, 4)            
+        """
+        return x[..., None].tile(1, 2, 3, 4)
+
+
+class _SimpleNetworkListTuple(NeuralNet[list[torch.Tensor], tuple[torch.Tensor,
+                                                                  ...],
+                                        tuple[torch.Tensor, ...]]):
+    """Helper network for list input and tuple output tests."""
+
+    def __init__(self):
+        super().__init__()
+        self.initialize()
+
+    def forward(self,
+                x: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            x: input list of three tensors of shape (batch_size, M1 , N1),
+               (batch_size, M1 , N2), (batch_size, M2 , N2)
+        Returns:
+            output: tuple of two tensors of shape (batch_size, M1, N1+N2) and (batch_size, M1+M2, N2)
+        """
+        x_1, x_2, x_3 = x
+        out_1 = torch.concat((x_1, x_2), dim=2)
+        out_2 = torch.concat((x_2, x_3), dim=1)
+        return (out_1, out_2)
+
+
 def test_uncollate_fn_when_output_is_a_tuple():
     # In this test, the output of the network is a tuple of three tensors.
 
@@ -92,22 +134,7 @@ def test_uncollate_fn_when_output_is_a_tensor():
 
 def test_predict_when_input_and_output_are_tensors():
 
-    class TestNet(NeuralNet):
-
-        def __init__(self):
-            super().__init__()
-            self.initialize()
-
-        def forward(self, x: torch.Tensor) -> torch.Tensor:
-            """
-            Args:
-                x: input tensor of shape (batch_size, M , N)
-            Returns:
-                output tensor of shape (batch_size, 2*M, 3*N, 4)            
-            """
-            return x[..., None].tile(1, 2, 3, 4)
-
-    net = TestNet()
+    net = _SimpleNetworkTensor()
 
     input = torch.randint(low=0, high=10, size=(7, 5, 6))
 
@@ -133,29 +160,7 @@ def test_predict_when_input_and_output_are_tensors():
 
 def test_predict_when_the_input_is_a_list_and_the_output_is_a_tuple():
 
-    class TestNet(NeuralNet[list[torch.Tensor], tuple[torch.Tensor, ...],
-                            tuple[torch.Tensor, ...]]):
-
-        def __init__(self):
-            super().__init__()
-            self.initialize()
-
-        def forward(
-                self,
-                x: list[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-            """
-            Args:
-                x: input list of three tensors of shape (batch_size, M1 , N1),
-                   (batch_size, M1 , N2), (batch_size, M2 , N2)
-            Returns:
-                output: tuple of two tensors of shape (batch_size, M1, N1+N2) and (batch_size, M1+M2, N2)
-            """
-            x_1, x_2, x_3 = x
-            out_1 = torch.concat((x_1, x_2), dim=2)
-            out_2 = torch.concat((x_2, x_3), dim=1)
-            return (out_1, out_2)
-
-    net = TestNet()
+    net = _SimpleNetworkListTuple()
 
     num_inputs = 7
     inputs = [[
