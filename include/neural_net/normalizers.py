@@ -337,3 +337,498 @@ class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
         if isinstance(output_batch, (list, tuple)):
             raise NotImplementedError()
         return self.unnormalize_targets_batch(output_batch)  # type: ignore
+
+
+# ============================================================================
+# Feature-wise Normalizers
+# ============================================================================
+
+
+class FeatNormalizer(ABC):
+    """
+    Abstract base class for feature-wise normalizers.
+    
+    These normalizers process a single feature (column) at a time. They maintain
+    an internal state that is updated via the `fit` method, which is called with
+    batches of values for that feature.
+    """
+
+    l_params_to_save = []  # List the attributes to be saved/loaded
+
+    @abstractmethod
+    def fit(self, values: torch.Tensor):
+        """
+        Update the internal state with a batch of values for this feature.
+        
+        Args:
+            values: 1D tensor or array-like containing values for this feature
+        """
+        pass
+
+    @abstractmethod
+    def normalize(self, values: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize the given values.
+        
+        Args:
+            values: 1D tensor containing values to normalize
+            
+        Returns:
+            Normalized values as a tensor
+        """
+        pass
+
+    @abstractmethod
+    def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
+        """
+        Unnormalize the given values.
+        
+        Args:
+            values: 1D tensor containing normalized values
+            
+        Returns:
+            Unnormalized values as a tensor
+        """
+        pass
+
+
+class IdentityFeatNormalizer(FeatNormalizer):
+    """
+    A feature normalizer that does not perform any normalization.
+    """
+
+    def fit(self, values: torch.Tensor):
+        """No-op for identity normalization."""
+        pass
+
+    def normalize(self, values: torch.Tensor) -> torch.Tensor:
+        """Return values unchanged."""
+        return values
+
+    def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
+        """Return values unchanged."""
+        return values
+
+
+class StdFeatNormalizer(FeatNormalizer):
+    """
+    A feature normalizer that normalizes to zero mean and unit standard deviation.
+    
+    This normalizer accumulates values during the fit phase to compute mean and
+    standard deviation, then applies the transformation: (x - mean) / std
+    """
+
+    l_params_to_save = ["mean", "std"]
+
+    def __init__(self):
+        self.mean: float | None = None
+        self.std: float | None = None
+        self._sum: float = 0.0
+        self._sum_sq: float = 0.0
+        self._count: int = 0
+
+    def fit(self, values: torch.Tensor):
+        """
+        Accumulate statistics from a batch of values.
+        
+        Args:
+            values: 1D tensor containing values for this feature
+        """
+        if len(values) == 0:
+            return
+
+        values_np = values.cpu().numpy() if isinstance(
+            values, torch.Tensor) else np.array(values)
+
+        self._sum += np.sum(values_np)
+        self._sum_sq += np.sum(values_np**2)
+        self._count += len(values_np)
+
+        # Update mean and std
+        self.mean = self._sum / self._count
+        variance = (self._sum_sq / self._count) - (self.mean**2)
+        self.std = np.sqrt(max(variance, 0.0))  # Ensure non-negative variance
+
+        # Avoid division by zero
+        if self.std == 0.0:
+            self.std = 1.0
+
+    def normalize(self, values: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize values to zero mean and unit standard deviation.
+        
+        Args:
+            values: 1D tensor containing values to normalize
+            
+        Returns:
+            Normalized values
+        """
+        assert self.mean is not None and self.std is not None, \
+            "StdFeatNormalizer must be fitted before normalization"
+        return (values - self.mean) / self.std
+
+    def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
+        """
+        Unnormalize values back to original scale.
+        
+        Args:
+            values: 1D tensor containing normalized values
+            
+        Returns:
+            Unnormalized values
+        """
+        assert self.mean is not None and self.std is not None, \
+            "StdFeatNormalizer must be fitted before unnormalization"
+        return values * self.std + self.mean
+
+
+class IntervalFeatNormalizer(FeatNormalizer):
+    """
+    A feature normalizer that scales values to a specified interval.
+    
+    This normalizer tracks the minimum and maximum values seen during fitting
+    and scales values to the specified target interval.
+    """
+
+    l_params_to_save = ["min_val", "max_val", "interval"]
+
+    def __init__(self, interval: tuple[float, float] = (-1.0, 1.0)):
+        """
+        Args:
+            interval: Target interval as (min, max) tuple
+        """
+        self.interval = interval
+        self.min_val: float | None = None
+        self.max_val: float | None = None
+
+    def fit(self, values: torch.Tensor):
+        """
+        Update min and max values from a batch.
+        
+        Args:
+            values: 1D tensor containing values for this feature
+        """
+        if len(values) == 0:
+            return
+
+        values_np = values.cpu().numpy() if isinstance(
+            values, torch.Tensor) else np.array(values)
+
+        batch_min = np.min(values_np)
+        batch_max = np.max(values_np)
+
+        if self.min_val is None:
+            self.min_val = batch_min
+        else:
+            self.min_val = min(self.min_val, batch_min)
+
+        if self.max_val is None:
+            self.max_val = batch_max
+        else:
+            self.max_val = max(self.max_val, batch_max)
+
+    def normalize(self, values: torch.Tensor) -> torch.Tensor:
+        """
+        Scale values to the target interval.
+        
+        Args:
+            values: 1D tensor containing values to normalize
+            
+        Returns:
+            Normalized values in the target interval
+        """
+        assert self.min_val is not None and self.max_val is not None, \
+            "IntervalFeatNormalizer must be fitted before normalization"
+
+        # Avoid division by zero
+        if self.max_val == self.min_val:
+            # All values are the same, map to middle of interval
+            return torch.full_like(values,
+                                   (self.interval[0] + self.interval[1]) / 2.0)
+
+        # Scale from [min_val, max_val] to [interval[0], interval[1]]
+        normalized = (values - self.min_val) / (self.max_val - self.min_val)
+        normalized = normalized * (self.interval[1] -
+                                   self.interval[0]) + self.interval[0]
+        return normalized
+
+    def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
+        """
+        Scale values back from the target interval to original scale.
+        
+        Args:
+            values: 1D tensor containing normalized values
+            
+        Returns:
+            Unnormalized values
+        """
+        assert self.min_val is not None and self.max_val is not None, \
+            "IntervalFeatNormalizer must be fitted before unnormalization"
+
+        # Avoid division by zero
+        if self.max_val == self.min_val:
+            return torch.full_like(values, self.min_val)
+
+        # Scale from [interval[0], interval[1]] to [min_val, max_val]
+        unnormalized = (values - self.interval[0]) / (self.interval[1] -
+                                                      self.interval[0])
+        unnormalized = unnormalized * (self.max_val -
+                                       self.min_val) + self.min_val
+        return unnormalized
+
+
+class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
+    """
+    A normalizer that applies different FeatNormalizers to each feature (column).
+    
+    This normalizer processes batches of shape (batch_size, num_feat) and applies
+    a separate normalizer to each column.
+    
+    Example:
+        normalizer = MultiFeatNormalizer(
+            input_normalizers=[
+                StdFeatNormalizer(),
+                IntervalFeatNormalizer(interval=(-1, 1)),
+                IdentityFeatNormalizer()
+            ],
+            output_normalizers=[...],
+            targets_normalizers=[...]
+        )
+    """
+
+    l_params_to_save = [
+        "input_normalizers_state", "output_normalizers_state",
+        "targets_normalizers_state"
+    ]
+
+    def __init__(self,
+                 input_normalizers: list[FeatNormalizer] | None = None,
+                 output_normalizers: list[FeatNormalizer] | None = None,
+                 targets_normalizers: list[FeatNormalizer] | None = None,
+                 batch_size: int = 32,
+                 **kwargs):
+        """
+        Args:
+            input_normalizers: List of FeatNormalizers, one per input feature
+            output_normalizers: List of FeatNormalizers, one per output feature
+            targets_normalizers: List of FeatNormalizers, one per target feature
+            batch_size: Batch size for fitting normalizers
+        """
+        super().__init__(**kwargs)
+        self.input_normalizers = input_normalizers or []
+        self.output_normalizers = output_normalizers or []
+        self.targets_normalizers = targets_normalizers or []
+        self.batch_size = batch_size
+
+    @property
+    def input_normalizers_state(self) -> list[dict]:
+        """Get the state of all input normalizers for saving."""
+        return [{
+            param: getattr(norm, param)
+            for param in norm.l_params_to_save
+        } for norm in self.input_normalizers]
+
+    @input_normalizers_state.setter
+    def input_normalizers_state(self, state: list[dict]):
+        """Restore the state of all input normalizers from loaded data."""
+        for norm, norm_state in zip(self.input_normalizers, state):
+            for param, value in norm_state.items():
+                setattr(norm, param, value)
+
+    @property
+    def output_normalizers_state(self) -> list[dict]:
+        """Get the state of all output normalizers for saving."""
+        return [{
+            param: getattr(norm, param)
+            for param in norm.l_params_to_save
+        } for norm in self.output_normalizers]
+
+    @output_normalizers_state.setter
+    def output_normalizers_state(self, state: list[dict]):
+        """Restore the state of all output normalizers from loaded data."""
+        for norm, norm_state in zip(self.output_normalizers, state):
+            for param, value in norm_state.items():
+                setattr(norm, param, value)
+
+    @property
+    def targets_normalizers_state(self) -> list[dict]:
+        """Get the state of all target normalizers for saving."""
+        return [{
+            param: getattr(norm, param)
+            for param in norm.l_params_to_save
+        } for norm in self.targets_normalizers]
+
+    @targets_normalizers_state.setter
+    def targets_normalizers_state(self, state: list[dict]):
+        """Restore the state of all target normalizers from loaded data."""
+        for norm, norm_state in zip(self.targets_normalizers, state):
+            for param, value in norm_state.items():
+                setattr(norm, param, value)
+
+    def fit(self, dataset: Dataset):
+        """
+        Fit all FeatNormalizers using the dataset.
+        
+        This method iterates through the dataset in batches and fits each
+        FeatNormalizer with the values from its corresponding column.
+        
+        Args:
+            dataset: Dataset returning pairs (input, targets)
+        """
+        assert isinstance(dataset, Dataset)
+
+        if not hasattr(dataset, "__len__"):
+            raise NotImplementedError("Dataset must implement __len__ method")
+
+        num_examples = len(dataset)  # type: ignore
+        assert num_examples > 0
+
+        # Check that the dataset contains pairs
+        example = dataset[0]
+        if not (isinstance(example, (tuple, list)) and len(example) == 2):
+            raise NotImplementedError(
+                "Dataset must return pairs (input, targets) when indexed.")
+
+        input_example, targets_example = example
+
+        # Verify shapes match the number of normalizers
+        if len(self.input_normalizers) > 0:
+            if isinstance(input_example, torch.Tensor):
+                num_input_feats = input_example.shape[-1] if input_example.dim(
+                ) > 0 else 1
+                assert num_input_feats == len(self.input_normalizers), \
+                    f"Number of input normalizers ({len(self.input_normalizers)}) must match " \
+                    f"number of input features ({num_input_feats})"
+
+        if len(self.targets_normalizers) > 0:
+            if isinstance(targets_example, torch.Tensor):
+                num_target_feats = targets_example.shape[
+                    -1] if targets_example.dim() > 0 else 1
+                assert num_target_feats == len(self.targets_normalizers), \
+                    f"Number of target normalizers ({len(self.targets_normalizers)}) must match " \
+                    f"number of target features ({num_target_feats})"
+
+        # Fit normalizers by iterating through the dataset in batches
+        with torch.no_grad():
+            for batch_start in range(0, num_examples, self.batch_size):
+                batch_end = min(batch_start + self.batch_size, num_examples)
+
+                # Collect batch
+                input_list = []
+                targets_list = []
+                for idx in range(batch_start, batch_end):
+                    input_ex, targets_ex = dataset[idx]
+                    input_list.append(input_ex)
+                    targets_list.append(targets_ex)
+
+                # Stack to form batches
+                if isinstance(input_list[0], torch.Tensor):
+                    input_batch = torch.stack(input_list)
+                    if input_batch.dim() == 1:
+                        input_batch = input_batch.unsqueeze(1)
+
+                    # Fit input normalizers column by column
+                    if len(self.input_normalizers) > 0:
+                        for feat_idx, normalizer in enumerate(
+                                self.input_normalizers):
+                            normalizer.fit(input_batch[:, feat_idx])
+
+                if isinstance(targets_list[0], torch.Tensor):
+                    targets_batch = torch.stack(targets_list)
+                    if targets_batch.dim() == 1:
+                        targets_batch = targets_batch.unsqueeze(1)
+
+                    # Fit target normalizers column by column
+                    if len(self.targets_normalizers) > 0:
+                        for feat_idx, normalizer in enumerate(
+                                self.targets_normalizers):
+                            normalizer.fit(targets_batch[:, feat_idx])
+
+    def _apply_to_batch(self, batch: torch.Tensor,
+                        normalizers: list[FeatNormalizer],
+                        method_name: str) -> torch.Tensor:
+        """
+        Helper method to apply a transformation to a batch using a list of normalizers.
+        
+        Args:
+            batch: Tensor of shape (batch_size, num_feats)
+            normalizers: List of FeatNormalizers, one per feature
+            method_name: Name of the method to call on each normalizer ('normalize' or 'unnormalize')
+            
+        Returns:
+            Transformed batch of the same shape
+        """
+        if len(normalizers) == 0:
+            return batch
+
+        if isinstance(batch, (list, tuple)):
+            raise NotImplementedError()
+
+        if not isinstance(batch, torch.Tensor):
+            return batch
+
+        # Apply each normalizer to its corresponding column
+        transformed_columns = []
+        for feat_idx, normalizer in enumerate(normalizers):
+            col = batch[:, feat_idx]
+            transformed_col = getattr(normalizer, method_name)(col)
+            transformed_columns.append(transformed_col)
+
+        return torch.stack(transformed_columns, dim=1)
+
+    def normalize_input_batch(self, input_batch: InputType) -> InputType:
+        """
+        Normalize input batch by applying each FeatNormalizer to its column.
+        
+        Args:
+            input_batch: Tensor of shape (batch_size, num_input_feats)
+            
+        Returns:
+            Normalized input batch of the same shape
+        """
+        return self._apply_to_batch(input_batch, self.input_normalizers,
+                                    'normalize')  # type: ignore
+
+    def normalize_targets_batch(self, targets_batch: TargetType) -> TargetType:
+        """
+        Normalize targets batch by applying each FeatNormalizer to its column.
+        
+        Args:
+            targets_batch: Tensor of shape (batch_size, num_target_feats)
+            
+        Returns:
+            Normalized targets batch of the same shape
+        """
+        return self._apply_to_batch(targets_batch, self.targets_normalizers,
+                                    'normalize')  # type: ignore
+
+    def unnormalize_output_batch(self, output_batch: OutputType) -> OutputType:
+        """
+        Unnormalize output batch by applying each FeatNormalizer to its column.
+        
+        Args:
+            output_batch: Tensor of shape (batch_size, num_output_feats)
+            
+        Returns:
+            Unnormalized output batch of the same shape
+        """
+        if len(self.output_normalizers) == 0:
+            # If no output normalizers, use target normalizers (as in DefaultNormalizer)
+            return self.unnormalize_targets_batch(output_batch)  # type: ignore
+
+        return self._apply_to_batch(output_batch, self.output_normalizers,
+                                    'unnormalize')  # type: ignore
+
+    def unnormalize_targets_batch(self,
+                                  targets_batch: TargetType) -> TargetType:
+        """
+        Unnormalize targets batch by applying each FeatNormalizer to its column.
+        
+        Args:
+            targets_batch: Tensor of shape (batch_size, num_target_feats)
+            
+        Returns:
+            Unnormalized targets batch of the same shape
+        """
+        return self._apply_to_batch(targets_batch, self.targets_normalizers,
+                                    'unnormalize')  # type: ignore
