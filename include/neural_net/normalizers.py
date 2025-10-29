@@ -100,9 +100,8 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
 
     def load(self):
         # Override if necessary
-        if self.nn_folder is None:
+        if self.params_file is None or not os.path.exists(self.params_file):
             return
-        assert self.params_file is not None
         with open(self.params_file, "rb") as f:
             d_params = pickle.load(f)
             for param in self.l_params_to_save:
