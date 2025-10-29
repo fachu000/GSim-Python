@@ -129,7 +129,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  nn_folder=None,
                  normalizer: Union[None, Normalizer, str] = None,
                  device_type: Union[None, str] = None,
-                 num_workers: int = 4,
+                 num_workers: int = 0,
                  **kwargs):
         """
         
@@ -562,11 +562,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             Else, it contains both inputs and targets.
 
         """
+        # MPS requires 'fork' multiprocessing context to work with num_workers > 0
+        # See: https://github.com/pytorch/pytorch/issues/87688
+        mp_context = 'fork' if (self.num_workers
+                                and self.device_type == "mps") else None
+
         return DataLoader(dataset,
                           batch_size=batch_size,
                           shuffle=shuffle,
                           num_workers=self.num_workers,
-                          pin_memory=True,
+                          pin_memory=(self.device_type == "cuda"),
+                          multiprocessing_context=mp_context,
                           collate_fn=functools.partial(
                               self.collate_and_normalize,
                               no_targets=no_targets))

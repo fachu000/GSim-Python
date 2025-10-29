@@ -18,6 +18,12 @@ from tqdm import tqdm
 import gsim
 from gsim.gfigure import GFigure
 from gsim.include.neural_net import NeuralNet
+from gsim.include.neural_net.normalizers import (
+    MultiFeatNormalizer,
+    StdFeatNormalizer,
+    IntervalFeatNormalizer,
+    IdentityFeatNormalizer,
+)
 
 
 class ExperimentSet(gsim.AbstractExperimentSet):
@@ -303,3 +309,96 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         l_G += [plot_data()]
 
         return l_G
+
+    # Experiment demonstrating MultiFeatNormalizer with linear regression on
+    # feature vectors
+    def experiment_1004(l_args):
+        """
+        This experiment creates a dataset with feature vectors where each
+        feature has different characteristics (scale, range, etc.). It then
+        performs linear regression using MultiFeatNormalizer to normalize
+        different features appropriately, comparing normalized vs unnormalized
+        approaches.
+        """
+
+        class FeatureVectorDataset(Dataset):
+            """Dataset with feature vectors having different characteristics."""
+
+            def __init__(self, num_examples):
+                self.num_examples = num_examples
+
+                # Create features with different scales and ranges:
+                # Feature 0: Small values around 0 (already normalized-ish)
+                feat_0 = torch.randn(num_examples, 1)
+
+                # Feature 1: Large values with high mean
+                feat_1 = 500 + 100 * torch.randn(num_examples, 1)
+
+                # Feature 2: Values in [0, 100] range
+                feat_2 = 100 * torch.rand(num_examples, 1)
+
+                # Feature 3: Binary-like feature
+                feat_3 = torch.randint(0, 2, (num_examples, 1)).float()
+
+                # Concatenate all features
+                self.m_feat = torch.cat([feat_0, feat_1, feat_2, feat_3],
+                                        dim=1)
+
+                # Linear target function: y = 2*x0 + 0.5*x1 + 3*x2 - 10*x3 + noise
+                self.m_targets = (2 * self.m_feat[:, 0:1] +
+                                  0.5 * self.m_feat[:, 1:2] +
+                                  3 * self.m_feat[:, 2:3] -
+                                  10 * self.m_feat[:, 3:4] +
+                                  5 * torch.randn(num_examples, 1))
+
+            def __len__(self):
+                return self.num_examples
+
+            def __getitem__(self, ind):
+                return self.m_feat[ind], self.m_targets[ind]
+
+        class LinearRegressionNet(NeuralNet):
+            """Simple linear regression network (no hidden layers)."""
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.fc = nn.Linear(4, 1)  # 4 input features, 1 output
+                self.initialize()
+
+            def forward(self, x):
+                return self.fc(x)
+
+        normalizer = MultiFeatNormalizer(
+            input_normalizers=[
+                IdentityFeatNormalizer(),  # Feature 0: already well-scaled
+                StdFeatNormalizer(
+                ),  # Feature 1: standardize (remove mean, divide by std)
+                IntervalFeatNormalizer(
+                    interval=(0, 1)),  # Feature 2: scale to [0,1]
+                IdentityFeatNormalizer(),  # Feature 3: binary, keep as is
+            ],
+            targets_normalizers=[
+                StdFeatNormalizer(),  # Standardize target
+            ],
+            batch_size=32)
+
+        # Create dataset
+        torch.manual_seed(42)
+        np.random.seed(42)
+        dataset = FeatureVectorDataset(5000)
+
+        net: NeuralNet = LinearRegressionNet(normalizer=normalizer)
+
+        d_training_history = net.fit(
+            dataset,
+            optimizer=torch.optim.Adam(net.parameters(), lr=0.01),
+            val_split=0.2,
+            lr_patience=30,
+            num_epochs=100,
+            batch_size=128,
+            f_loss=lambda m_pred, m_targets: torch.mean(
+                (m_targets - m_pred)**2, dim=1),
+            eval_unnormalized_loss=True,
+        )
+
+        return net.plot_training_history(d_training_history)

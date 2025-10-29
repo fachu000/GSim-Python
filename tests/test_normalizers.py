@@ -318,7 +318,6 @@ class TestMultiFeatNormalizer:
 
             # Get state via properties
             input_state = normalizer1.input_normalizers_state
-            output_state = normalizer1.output_normalizers_state
             targets_state = normalizer1.targets_normalizers_state
 
             # Save

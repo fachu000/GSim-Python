@@ -590,34 +590,41 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
                 StdFeatNormalizer(),
                 IntervalFeatNormalizer(interval=(-1, 1)),
                 IdentityFeatNormalizer()
-            ],
-            output_normalizers=[...],
-            targets_normalizers=[...]
+            ],            
+            targets_normalizers=[...],
+            output_normalizers=[...]
         )
+
+    The `input_normalizers` and `targets_normalizers` are fit to the dataset. 
+        
+    If `output_normalizers` is not provided, the target normalizers are used
+    for unnormalizing outputs.        
     """
 
-    l_params_to_save = [
-        "input_normalizers_state", "output_normalizers_state",
-        "targets_normalizers_state"
-    ]
+    l_params_to_save = ["input_normalizers_state", "targets_normalizers_state"]
 
     def __init__(self,
                  input_normalizers: list[FeatNormalizer] | None = None,
-                 output_normalizers: list[FeatNormalizer] | None = None,
                  targets_normalizers: list[FeatNormalizer] | None = None,
+                 output_normalizers: list[FeatNormalizer] | None = None,
                  batch_size: int = 32,
                  **kwargs):
         """
         Args:
             input_normalizers: List of FeatNormalizers, one per input feature
-            output_normalizers: List of FeatNormalizers, one per output feature
+
             targets_normalizers: List of FeatNormalizers, one per target feature
+            
+            output_normalizers: List of FeatNormalizers, one per output feature.
+            If None or empty, the target normalizers are used for unnormalizing
+            outputs.
+            
             batch_size: Batch size for fitting normalizers
         """
         super().__init__(**kwargs)
         self.input_normalizers = input_normalizers or []
-        self.output_normalizers = output_normalizers or []
         self.targets_normalizers = targets_normalizers or []
+        self.output_normalizers = output_normalizers or []
         self.batch_size = batch_size
 
     @property
@@ -632,21 +639,6 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
     def input_normalizers_state(self, state: list[dict]):
         """Restore the state of all input normalizers from loaded data."""
         for norm, norm_state in zip(self.input_normalizers, state):
-            for param, value in norm_state.items():
-                setattr(norm, param, value)
-
-    @property
-    def output_normalizers_state(self) -> list[dict]:
-        """Get the state of all output normalizers for saving."""
-        return [{
-            param: getattr(norm, param)
-            for param in norm.l_params_to_save
-        } for norm in self.output_normalizers]
-
-    @output_normalizers_state.setter
-    def output_normalizers_state(self, state: list[dict]):
-        """Restore the state of all output normalizers from loaded data."""
-        for norm, norm_state in zip(self.output_normalizers, state):
             for param, value in norm_state.items():
                 setattr(norm, param, value)
 
