@@ -216,7 +216,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
 
     @staticmethod
-    def collate_fn(*args, **kwargs):
+    def collate_fn(*args, no_targets=False, **kwargs):
         # Override if needed
         return default_collate(*args, **kwargs)
 
@@ -284,7 +284,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         """
 
-        l_batch = self.collate_fn(l_batch)
+        l_batch = self.collate_fn(l_batch, no_targets=no_targets)
 
         # After collation, l_batch is (input_batch, targets_batch)
         if self.normalizer is not None:
