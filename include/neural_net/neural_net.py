@@ -855,6 +855,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             dataset_train = dataset
             num_examples_val = len(dataset_val)
         val = num_examples_val > 0
+        if patience is not None and val is False:
+            gsim_logger.warning(
+                "patience is set but no validation data is provided. Ignoring patience."
+            )
+            patience = None
 
         # Fit the normalizer
         if self.normalizer is not None:
