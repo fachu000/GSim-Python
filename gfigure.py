@@ -1,3 +1,208 @@
+"""
+This module provides a layer over matplotlib that is used to construct and plot
+figure representations. It affords an intuitive and compact syntax that allows
+one to store and edit figures.  
+
+The main idea is that a figure is a collection of subplots, and each subplot is
+a collection of curves. Each curve can be 2D or 3D. 
+
+The easiest way to learn how to use this module is to run the examples at the
+end of this file. To do so, cd to the folder `gsim` and type:
+
+python3 gfigure.py <figure_number>
+
+where <figure_number> is an integer. See the code and possible values of
+<figure_number> in `plot_example_figure` below.
+
+The reference documentation of the arguments of GFigure and its functions
+follows.
+
+FIGURE
+======
+
+figsize: can be a tuple of format (width, height), e.g. (20., 10.). If
+    None and the global `default_figsize` is not None, the value of the latter
+    is used.
+
+`layout`: can be "", "tight", or "constrained". See pyplot documentation.
+
+        Since April 2022, layout='tight' is set by default.
+
+One of `num_subplot_rows` or `num_subplot_columns` can be specified for figures
+with multiple subplots. 
+
+SUBPLOT ARGUMENTS:
+=================
+
+The first set of arguments allow the user to create a subplot when creating the
+GFigure object.
+
+title : str 
+
+xlabel : str
+
+ylabel : str
+
+grid : bool
+
+xlim : tuple, endpoints for the x axis.
+
+ylim : tuple, endpoints for the y axis.
+
+zlim : tuple, endpoints for the z axis. Used e.g. for the color scale. 
+
+yticks: None or 1D array like. If None, the default ticks are used. If 1D array
+like, it specifies the ticks. yticks can be set to an empty list for no ticks.
+
+legend_loc: str, it indicates the location of the legend. Example values:
+    "lower left", "upper right", etc.
+
+num_legend_cols: int, number of columns in the legend.
+
+sharex: Set to true so that the x-axis is shared with the previous subplot. 
+
+transpose_subplots: if True, the second subplot is placed at position (1,0), the
+third at (2,0), etc. 
+
+CURVE ARGUMENTS:
+=================
+
+1. 2D plots
+    -----------
+
+xaxis and yaxis: 
+
+(a) To specify only one curve: 
+
+    - `yaxis` can be a 1D np.ndarray, a 1D tf.Tensor or a list of a
+        numeric
+    type 
+
+    - `xaxis` can be None, a list of a numeric type, or a 1D np.array
+    of the same length as `yaxis`. 
+
+(b) To specify one or more curves: 
+
+    - `yaxis` can be: -> a list whose elements are as described in (a)
+        -> M
+    x N np.ndarray or tf.Tensor. Each row corresponds to a curve. 
+
+    - `xaxis` can be either as in (a), so all curves share the same
+        X-axis
+    points, or -> a list whose elements are as described in (a) -> Mx x N
+    np.ndarray. Each row corresponds to a curve. Mx must be either M or 1.
+    
+ylower and yupper: specify a shaded area around the curve, used e.g. for
+confidence bounds. The area between ylower and yaxis as well as the area between
+yaxis and yupper are shaded. Their format is the same as yaxis.
+
+zaxis: None
+
+mode: it can be 'plot' (default) or 'stem'
+
+2. 3D plots
+-----------
+
+2a. Axes
+--------
+
+zaxis: M x N numpy array. When `mode` is 'imshow', the bottom left of the matrix
+corresponds to the bottom left of the figure. 
+
+There are 3 options:
+
+- xaxis and yaxis are M x N numpy arrays. The (x,y) coordinates
+    corresponding to zaxis[i,j] are xaxis[i,j] and yaxis[i,j].
+
+- xaxis and yaxis are vectors of length N and M, respectively. The (x,y)
+    coordinates corresponding to zaxis[i,j] are xaxis[j] and yaxis[i]. This is
+    useful e.g. when we want the matrix to provide the values of a function on
+    the first quadrant, where the bottom-left entry of the matrix would
+    correspond to the origin and yaxis is thought of as a column vector whose
+    bottom entry provides the y-coordinate of the origin. 
+
+- xaxis and yaxis are None or []. In this case, it is understood that
+    the user wants to visualize the entries of a matrix. Thus, the (x,y)
+    coordinates corresponding to zaxis[i,j] are respectively j and i. Arguments
+    xlabel and ylabel respectively correspond to columns and rows. 
+
+
+2b. Rest of arguments
+---------------------
+
+mode: it can be 'imshow' (default), 'contour3D', or 'surface'.
+
+zinterpolation: Supported values are 'none', 'antialiased', 'nearest',
+'bilinear', 'bicubic', 'spline16', 'spline36', 'hanning', 'hamming', 'hermite',
+'kaiser', 'quadric', 'catrom', 'gaussian', 'bessel', 'mitchell', 'sinc',
+'lanczos'.
+
+color_bar: If True, a color bar is created for the specified axis.
+
+global_color_bar: if True, one color bar for the entire figure. 
+
+global_color_bar_label: str indicating the label of the global color bar.
+
+global_color_bar_position: vector with four entries.
+
+aspect: can be 'square' or take the values in plt.imshow. It applies only to
+imshow. 
+
+3. Others
+    ---------
+
+styles: specifies the style argument to plot, similarly to MATLAB.
+Possibilities:
+    
+    - str : this style is applied to all curves specified by `xaxis` and
+    `yaxis`. It is a concatenation of the following items: 
+
+        * marker style (e.g. '.','o','x')
+
+        * line style (e.g. '-','--','-.')
+
+        * color. The color can be:
+            
+            - a letter, as in MATLAB (e.g. 'k', 'b',
+            'r') 
+            
+            - an hexadecimal number of the form  "#??????", where ?
+            denotes an hexadecimal digit (e.g. '#2244FF'). The curve style needs
+            to precede the color specification, e.g. 'o--#2244FF'.
+
+            - the hash symbol followed by a natural number, e.g. '#3'. In this
+            case, the number indicates the index of the color in the default
+            matplotlib color cycle. The curve style needs to precede the color
+            specification, e.g. 'o--#3'.
+
+    - list of str : then styles[n] is applied to the n-th
+    curve. Its length must be at least the number of curves.
+
+legend : str, tuple of str, or list of str. If the str begins with "_",
+    then that curve is not included in the legend.
+
+
+ARGUMENTS FOR SPECIFYING HOW TO SUBPLOT:
+========================================
+
+
+`ind_active_subplot`: The index of the subplot that is created and where
+    new curves will be added until a different value for the property of GFigure
+    with the same name is specified. A value of 0 refers to the first subplot.
+
+`num_subplot_rows` and `num_subplot_columns` determine the number of
+    subplots in each column and row respectively. If None, their value is
+    determined by the value of the other of these parameters and the number of
+    specified subplots. If the number of specified subplots does not equal
+    num_subplot_columns*num_subplot_rows, then the value of num_subplot_columns
+    is determined from the number of subplots and num_subplot_rows.
+
+    The values of the properties of GFigure with the same name can be specified
+    subsequently.
+
+
+"""
+
 import copy
 import sys
 
@@ -8,17 +213,6 @@ title_to_caption = False
 default_figsize = None  # `None` lets plt choose
 
 default_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-"""
-
-The easiest way to learn how to use this module is to run the examples at the
-end of this file. To do so, cd to the folder gsim and type:
-
-python3 gfigure.py <figure_number>
-
-where <figure_number> is an integer. See the code and possible values of
-<figure_number> in `plot_example_figure` below.
-
-"""
 """ 
 TODO: 
 
@@ -251,10 +445,21 @@ class Curve:
             # specified through `style`
             plot_fun(*axis_args, style, label=self.legend_str)
         else:
-            # Get the hex color from self.style if present
-            hex_color = '#' + style.split("#")[1] if "#" in style else None
+            # Get the color from self.style if present
+            color_spec = style.split("#")[1] if "#" in style else None
+            if color_spec:
+                if len(color_spec) == 6:
+                    hex_color = "#" + color_spec
+                else:
+                    # The default color cycle of matplotlib contains just 10
+                    # colors. Consider extending this.
+                    plt_colors = plt.rcParams['axes.prop_cycle'].by_key(
+                    )['color']
+                    hex_color = plt_colors[int(color_spec) % len(plt_colors)]
+                kwargs = {'color': hex_color}
+            else:
+                kwargs = dict()
             style = style.split("#")[0]
-            kwargs = {'color': hex_color} if hex_color else dict()
 
             plt.plot(*axis_args, style, label=self.legend_str, **kwargs)
 
@@ -516,7 +721,7 @@ class Subplot:
         """
       Returns a list of str. 
       """
-        err_msg = "Style argument must be an str " "or list of str"
+        err_msg = "Style argument must be an str or list of str"
         if type(style_arg) == str:
             return [style_arg]
         elif type(style_arg) == list:
@@ -537,8 +742,15 @@ class Subplot:
       """
 
         def unify_format(axis):
+            """
+            Returns:
 
-            def ndarray_to_list(arr):
+                ll_out: it can be [None] or a list of lists. In the second case,
+                ll_out[n] is [] or a list of float. 
+            
+            """
+
+            def ndarray_to_list_of_lists(arr):
                 """Returns a list of lists."""
                 assert (type(arr) == np.ndarray)
                 if arr.ndim == 1:
@@ -558,18 +770,17 @@ class Subplot:
                 axis = axis.numpy()
 
             if (type(axis) == np.ndarray):
-                return ndarray_to_list(axis)
+                return ndarray_to_list_of_lists(axis)
             elif (type(axis) == list):
                 # at this point, `axis` can be:
                 # 1. empty list: either no curves are specified or, in case of
                 #    the x-axis, the specified curves should use the default xaxis.
                 if len(axis) == 0:
                     return []
-                # 2. A list of a numeric type. Only one axis specified.
+                # 2. A list of a numeric type. Only one curve specified.
                 if is_number(axis[0]):
-                    #return [copy.copy(axis)]
                     return [[float(ax) for ax in axis]]
-                # 3. A list where each entry specifies one axis.
+                # 3. A list where each entry specifies one curve.
                 else:
                     out_list = []
                     for entry in axis:
@@ -581,7 +792,6 @@ class Subplot:
                         # 3b. an np.ndarray
                         if isinstance(entry, np.ndarray):
                             if entry.ndim == 1:
-                                #out_list.append(copy.copy(entry))
                                 out_list.append([float(ent) for ent in entry])
                             else:
                                 raise Exception(
@@ -594,7 +804,6 @@ class Subplot:
                                 out_list.append([])
                             # 3c2: Numerical type
                             elif is_number(entry[0]):
-                                #out_list.append(copy.copy(entry))
                                 out_list.append([float(ent) for ent in entry])
                             else:
                                 raise TypeError
@@ -608,9 +817,12 @@ class Subplot:
         l_xaxis = unify_format(xaxis_arg)
         l_yaxis = unify_format(yaxis_arg)
         """At this point, `l_xaxis` can be:
-      - []: use the default xaxis if a curve is provided (len(l_yaxis)>0). 
-        No curves specified if len(l_yaxis)=0. 
+
+      - []: use the default xaxis if a curve is provided (len(l_yaxis)>0). No
+        curves specified if len(l_yaxis)=0. 
+
       - [None]: use the default xaxis for all specfied curves.
+      
       - [xaxis1, xaxis2,... xaxisN], where xaxisn is a list of float.
       """
 
@@ -739,190 +951,6 @@ class GFigure:
                  global_color_bar_position=[0.85, 0.35, 0.02, 0.5],
                  layout="tight",
                  **kwargs):
-        """
-
-      FIGURE
-      ======
-
-       figsize: can be a tuple of format (width, height), e.g. (20., 10.). If
-            None and the global `default_figsize` is not None, the value of the
-            latter is used.
-
-      `layout`: can be "", "tight", or "constrained". See pyplot documentation.
-       
-                Since April 2022, layout='tight' is set by default.
-
-        One of `num_subplot_rows` or `num_subplot_columns` can be specified for
-        figures with multiple subplots. 
-
-      SUBPLOT ARGUMENTS:
-      =================
-
-      The first set of arguments allow the user to create a subplot when
-      creating the GFigure object.
-
-      title : str 
-
-      xlabel : str
-
-      ylabel : str
-
-      grid : bool
-
-      xlim : tuple, endpoints for the x axis.
-
-      ylim : tuple, endpoints for the y axis.
-
-      zlim : tuple, endpoints for the z axis. Used e.g. for the color scale. 
-
-      yticks: None or 1D array like. If None, the default ticks are used. If 1D
-      array like, it specifies the ticks. yticks can be set to an empty list for
-      no ticks.
-
-      legend_loc: str, it indicates the location of the legend. Example values:
-          "lower left", "upper right", etc.
-        
-      num_legend_cols: int, number of columns in the legend.
-
-      sharex: Set to true so that the x-axis is shared with the previous
-      subplot. 
-
-      transpose_subplots: if True, the second subplot is placed at position
-      (1,0), the third at (2,0), etc. 
-
-      CURVE ARGUMENTS:
-      =================
-
-      1. 2D plots
-         -----------
-
-      xaxis and yaxis: 
-
-        (a) To specify only one curve: 
-
-            - `yaxis` can be a 1D np.ndarray, a 1D tf.Tensor or a list of a
-              numeric
-            type 
-
-            - `xaxis` can be None, a list of a numeric type, or a 1D np.array
-            of the same length as `yaxis`. 
-
-        (b) To specify one or more curves: 
-
-            - `yaxis` can be: -> a list whose elements are as described in (a)
-              -> M
-            x N np.ndarray or tf.Tensor. Each row corresponds to a curve. 
-
-            - `xaxis` can be either as in (a), so all curves share the same
-              X-axis
-            points, or -> a list whose elements are as described in (a) -> Mx x
-            N np.ndarray. Each row corresponds to a curve. Mx must be either M
-            or 1.
-          
-      ylower and yupper: specify a shaded area around the curve, used e.g.
-        for confidence bounds. The area between ylower and yaxis as well as the
-        area between yaxis and yupper are shaded. Their format is the same as
-        yaxis.
-
-      zaxis: None
-
-      mode: it can be 'plot' (default) or 'stem'
-
-      2. 3D plots
-      -----------
-
-        2a. Axes
-        --------
-        
-        zaxis: M x N numpy array. When `mode` is 'imshow', the bottom left of
-        the matrix corresponds to the bottom left of the figure. 
-
-        There are 3 options:
-      
-        - xaxis and yaxis are M x N numpy arrays. The (x,y) coordinates
-          corresponding to zaxis[i,j] are xaxis[i,j] and yaxis[i,j].
-
-        - xaxis and yaxis are vectors of length N and M, respectively. The (x,y)
-          coordinates corresponding to zaxis[i,j] are xaxis[j] and yaxis[i].
-          This is useful e.g. when we want the matrix to provide the values of a
-          function on the first quadrant, where the bottom-left entry of the
-          matrix would correspond to the origin and yaxis is thought of as a
-          column vector whose bottom entry provides the y-coordinate of the
-          origin. 
-
-        - xaxis and yaxis are None or []. In this case, it is understood that
-          the user wants to visualize the entries of a matrix. Thus, the (x,y)
-          coordinates corresponding to zaxis[i,j] are respectively j and i.
-          Arguments xlabel and ylabel respectively correspond to columns and
-          rows. 
-      
-
-        2b. Rest of arguments
-        ---------------------
-
-      mode: it can be 'imshow' (default), 'contour3D', or 'surface'.
-
-      zinterpolation: Supported values are 'none', 'antialiased', 'nearest',
-      'bilinear', 'bicubic', 'spline16', 'spline36', 'hanning', 'hamming',
-      'hermite', 'kaiser', 'quadric', 'catrom', 'gaussian', 'bessel',
-      'mitchell', 'sinc', 'lanczos'.
-
-      color_bar: If True, a color bar is created for the specified axis.
-
-      global_color_bar: if True, one color bar for the entire figure. 
-
-      global_color_bar_label: str indicating the label of the global color bar.
-
-      global_color_bar_position: vector with four entries.
-
-      aspect: can be 'square' or take the values in plt.imshow. It applies only
-      to imshow. 
-
-      3. Others
-         ---------
-
-      styles: specifies the style argument to plot, as in MATLAB. Possibilities:
-          
-          - str : this style is applied to all curves specified by `xaxis` and
-          `yaxis`. It is a concatenation of the following items: 
-      
-                * marker style (e.g. '.','o','x')
-      
-                * line style (e.g. '-','--','-.')
-      
-                * color. The color can be a letter as in MATLAB (e.g. 'k', 'b',
-                  'r') or an hexadecimal number of the form  "#??????", where ?
-                  denotes a hexadecimal digit (e.g. '#2244FF'). 
-
-          - list of str : then styles[n] is applied to the n-th
-          curve. Its length must be at least the number of curves.
-
-      legend : str, tuple of str, or list of str. If the str begins with "_",
-          then that curve is not included in the legend.
-
-
-      ARGUMENTS FOR SPECIFYING HOW TO SUBPLOT:
-      ========================================
-
-
-     `ind_active_subplot`: The index of the subplot that is created and where
-          new curves will be added until a different value for the property of
-          GFigure with the same name is specified. A value of 0 refers to the
-          first subplot.
-
-      `num_subplot_rows` and `num_subplot_columns` determine the number of
-          subplots in each column and row respectively. If None, their value is
-          determined by the value of the other of these parameters and the
-          number of specified subplots. If the number of specified subplots does
-          not equal num_subplot_columns*num_subplot_rows, then the value of
-          num_subplot_columns is determined from the number of subplots and
-          num_subplot_rows.
-
-          The values of the properties of GFigure with the same name can be
-          specified subsequently.
-
-
-      """
 
         # Create a subplot if the arguments specify one
         new_subplot = Subplot(*args, **kwargs)
@@ -1398,6 +1426,31 @@ def plot_example_figure(ind_example):
                        title="Parabola",
                        num_xticks_decimal_places=2,
                        xticks=v_x + 0.5)
+
+    elif ind_example == 12:
+        # Example of color specification (not colorp)
+        G = GFigure(xlabel="x", ylabel="y")
+        num_curves = 3
+        v_x = np.linspace(0, 10, 100)
+        for ind_curve in range(num_curves):
+            v_mean = (ind_curve + 1) / num_curves * 2 * v_x
+            v_y = v_mean + np.random.normal(scale=0.5, size=v_x.shape)
+            G.add_curve(xaxis=v_x,
+                        yaxis=v_y,
+                        legend="Curve %d" % (ind_curve + 1),
+                        styles=f'.#{ind_curve}')
+            G.add_curve(xaxis=v_x,
+                        yaxis=v_mean,
+                        legend="Curve %d (mean)" % (ind_curve + 1),
+                        styles=f'-#{ind_curve}')
+
+        G.add_curve(xaxis=v_x,
+                    yaxis=v_x,
+                    styles='--#000000',
+                    legend='Reference y=x')
+
+    else:
+        raise ValueError("Invalid example index")
 
     G.plot()
     plt.show()
