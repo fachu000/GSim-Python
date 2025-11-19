@@ -47,7 +47,14 @@ grid : bool
 
 xlim : tuple, endpoints for the x axis.
 
-ylim : tuple, endpoints for the y axis.
+ylim : 
+    - tuple, endpoints for the y axis.
+
+    - float: then the y-limits are set to (y_min - ylim * delta , y_max + ylim *
+      delta), where delta = y_max - y_min, and y_min and y_max are the minimum
+      and maximum values of the y-axis data to be plotted in the subplot. This
+      is useful because matplotlib disables y-axis autoscaling when `xlim` is
+      provided. 
 
 zlim : tuple, endpoints for the z axis. Used e.g. for the color scale. 
 
@@ -415,19 +422,6 @@ class Curve:
             if self.yupper:
                 plot_band(self.yaxis, self.yupper)
 
-        # if type(self.xaxis) == list and len(self.xaxis):
-        #     if self.style:
-        #         plt.plot(self.xaxis,
-        #                  self.yaxis,
-        #                  self.style,
-        #                  label=self.legend_str)
-        #     else:
-        #         plt.plot(self.xaxis, self.yaxis, label=self.legend_str, use_line_collection=True)
-        # else:
-        #     if self.style:
-        #         plt.plot(self.yaxis, self.style, label=self.legend_str)
-        #     else:
-        #         plt.plot(self.yaxis, label=self.legend_str)
         if type(self.xaxis) == list and len(self.xaxis):
             axis_args = (self.xaxis, self.yaxis)
         else:
@@ -581,7 +575,7 @@ class Subplot:
         self.yticks = yticks
         self.legend_loc = legend_loc
         self.num_legend_cols = num_legend_cols
-        self.l_curves = []
+        self.l_curves: list[Curve] = []
         self.sharex = sharex
         if create_curves:
             self.add_curve(**kwargs)
@@ -904,7 +898,10 @@ class Subplot:
 
         if "ylim" in dir(self):  # backwards compatibility
             if self.ylim:
-                plt.ylim(self.ylim)
+                if isinstance(self.ylim, float):
+                    plt.ylim(self.get_auto_ylims())
+                else:
+                    plt.ylim(self.ylim)
 
         return
 
@@ -934,6 +931,45 @@ class Subplot:
             if curve.is_3D:
                 return True
         return False
+
+    def get_auto_ylims(self):
+        """Returns automatic y-limits based on the curves in self.l_curves. 
+        
+        It first finds the minimum and maximum y-values among all 2D curves
+        within the x-limits if specified.
+
+        Then returns (y_min - self.ylim * (y_max - y_min), y_max + self.ylim *
+        (y_max - y_min)).
+        """
+        assert isinstance(self.ylim, float), "self.ylim must be a float"
+
+        y_min = sys.float_info.max
+        y_max = -sys.float_info.max
+        for curve in self.l_curves:
+            if not curve.is_3D:
+                # 2D curve
+                if curve.xaxis is None or (type(curve.xaxis) == list
+                                           and len(curve.xaxis) == 0):
+                    x_vals = np.arange(len(curve.yaxis))
+                else:
+                    x_vals = np.array(curve.xaxis)
+                y_vals = np.array(curve.yaxis)
+
+                # Consider only the data within the x-limits
+                if "xlim" in dir(self) and self.xlim:
+                    ind_within_xlim = np.where((x_vals >= self.xlim[0])
+                                               & (x_vals <= self.xlim[1]))[0]
+                    if len(ind_within_xlim) == 0:
+                        continue
+                    y_vals = y_vals[ind_within_xlim]
+
+                y_min = min(y_min, np.min(y_vals))
+                y_max = max(y_max, np.max(y_vals))
+        if y_min == sys.float_info.max or y_max == -sys.float_info.max:
+            raise ValueError(
+                "Could not determine automatic y-limits; no 2D curves found.")
+        y_range = y_max - y_min
+        return (y_min - self.ylim * y_range, y_max + self.ylim * y_range)
 
 
 class GFigure:
@@ -1448,6 +1484,28 @@ def plot_example_figure(ind_example):
                     yaxis=v_x,
                     styles='--#000000',
                     legend='Reference y=x')
+
+    elif ind_example == 13:
+        # By default, pyplot autoscale in the y-axis is disabled when providing
+        # xlim.
+        #
+        # GFigure allows the specification of the y-limit via a float to restore
+        # autoscaling.
+        v_x = np.linspace(0, 40, 1000)
+        v_y = 3 * np.sin(10 * v_x) + 10 * v_x
+        G = GFigure(xaxis=v_x,
+                    yaxis=v_y,
+                    xlabel="x",
+                    ylabel="f(x)",
+                    title="Without y-limit specification",
+                    xlim=(2, 4))
+        G.next_subplot(xaxis=v_x,
+                       yaxis=v_y,
+                       xlabel="x",
+                       ylabel="f(x)",
+                       title="With y-limit specification",
+                       xlim=(2, 4),
+                       ylim=0.2)  # enables autoscaling
 
     else:
         raise ValueError("Invalid example index")
