@@ -963,8 +963,8 @@ class Subplot:
                         continue
                     y_vals = y_vals[ind_within_xlim]
 
-                y_min = min(y_min, np.min(y_vals))
-                y_max = max(y_max, np.max(y_vals))
+                y_min = min(y_min, np.nanmin(y_vals))
+                y_max = max(y_max, np.nanmax(y_vals))
         if y_min == sys.float_info.max or y_max == -sys.float_info.max:
             raise ValueError(
                 "Could not determine automatic y-limits; no 2D curves found.")
