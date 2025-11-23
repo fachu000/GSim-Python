@@ -855,8 +855,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                        f"train loss me = {loss_train_me_this_epoch:.4f}, ")
             if obtain_static_training_loss:
                 str_log += (f"train loss = {loss_train_this_epoch:.4f}, ")
-            str_log += (f"val loss = {loss_val_this_epoch:.4f}, " +
-                        f"lr = {optimizer.param_groups[0]['lr']:.2e}")
+            str_log += f"val loss = {loss_val_this_epoch:.4f}, "
+            if eval_unnormalized_loss:
+                str_log += (f"unnormalized train loss = "
+                            f"{l_unnormalized_loss_train[-1]:.4f}, ")
+                if val:
+                    str_log += (f"unnormalized val loss = "
+                                f"{l_unnormalized_loss_val[-1]:.4f}, ")
+            str_log += f"lr = {optimizer.param_groups[0]['lr']:.2e}"
             gsim_logger.info(str_log)
 
         self._assert_initialized()
