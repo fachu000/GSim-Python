@@ -593,6 +593,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             lr_decay=.8,
             restart_optimizer_when_reducing_lr=False,
             eval_unnormalized_loss=False,
+            fit_normalizer=True,
+            obtain_static_training_loss=False,
             llc=LossLandscapeConfig()):
         """ 
         Starts a training session.
@@ -607,7 +609,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         Args:
 
-         `f_loss`: f_loss(output_batch,target_batch) 
+          `f_loss`: f_loss(output_batch,target_batch) 
 
           `batch_size_eval` is the batch size used to evaluate the loss. If
           None, `batch_size` is used also for evaluation.
@@ -626,6 +628,16 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
           one in self.nn_folder/optimizer.pth if this file exists and can be
           loaded, or the state of a new optimizer otherwise) every time the
           learning rate is reduced. This may help escape local minima.
+
+          `fit_normalizer`: if True, the normalizer is fitted before training if
+          provided. 
+
+          `obtain_static_training_loss`: if True, the training loss is computed
+          for fixed network weights at the end of each epoch. Otherwise, only
+          the moving estimate of the training loss is computed. The moving
+          estimate is obtained by averaging the training loss after each batch
+          update. Thus, it is an average of loss values obtained for different
+          network weights. 
 
         Returns a dict with keys and values given by:
          
@@ -836,6 +848,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 unnormalized_loss_train_this_epoch)
             l_unnormalized_loss_val.append(unnormalized_loss_val_this_epoch)
 
+        def log_epoch_info(ind_epoch, num_epochs, ind_epoch_start,
+                           loss_train_me_this_epoch, loss_train_this_epoch,
+                           loss_val_this_epoch, optimizer):
+            str_log = (f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: " +
+                       f"train loss me = {loss_train_me_this_epoch:.4f}, ")
+            if obtain_static_training_loss:
+                str_log += (f"train loss = {loss_train_this_epoch:.4f}, ")
+            str_log += (f"val loss = {loss_val_this_epoch:.4f}, " +
+                        f"lr = {optimizer.param_groups[0]['lr']:.2e}")
+            gsim_logger.info(str_log)
+
         self._assert_initialized()
         torch.cuda.empty_cache()
 
@@ -863,9 +886,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         # Fit the normalizer
         if self.normalizer is not None:
-            gsim_logger.info("Fitting the normalizer...")
-            self.normalizer.fit(dataset_train)
-            self.normalizer.save()
+            if fit_normalizer:
+                gsim_logger.info("Fitting the normalizer...")
+                self.normalizer.fit(dataset_train)
+                self.normalizer.save()
+            else:
+                gsim_logger.info("Skipping normalizer fitting as requested.")
 
         # Instantiate the data loaders
         dataloader_train = self.make_data_loader(dataset_train, batch_size,
@@ -911,8 +937,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             self.train()
             loss_train_me_this_epoch = self._run_epoch(dataloader_train,
                                                        f_loss, optimizer)
-            loss_train_this_epoch = self._run_epoch(dataloader_train_eval,
-                                                    f_loss)
+            loss_train_this_epoch = self._run_epoch(
+                dataloader_train_eval,
+                f_loss) if obtain_static_training_loss else np.nan
             self.eval()
             loss_val_this_epoch = self._run_epoch(
                 dataloader_val, f_loss) if dataloader_val else np.nan
@@ -920,9 +947,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             compute_unnormalized_losses(dataloader_train_eval, dataloader_val,
                                         f_loss)
 
-            gsim_logger.info(
-                f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: train loss me = {loss_train_me_this_epoch:.4f}, train loss = {loss_train_this_epoch:.4f}, val loss = {loss_val_this_epoch:.4f}, lr = {optimizer.param_groups[0]['lr']:.2e}"
-            )
+            log_epoch_info(ind_epoch, num_epochs, ind_epoch_start,
+                           loss_train_me_this_epoch, loss_train_this_epoch,
+                           loss_val_this_epoch, optimizer)
 
             l_loss_train_me.append(loss_train_me_this_epoch)
             l_loss_train.append(loss_train_this_epoch)
@@ -951,8 +978,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             if lr_patience or not val:
                 # The weights should also be stored when val_split==0 since they
                 # need to be returned at the end.
-                if loss_train_this_epoch < best_train_loss:
-                    best_train_loss = loss_train_this_epoch
+                ref_train_loss = loss_train_this_epoch if obtain_static_training_loss else loss_train_me_this_epoch
+                if ref_train_loss < best_train_loss:
+                    best_train_loss = ref_train_loss
                     self.save_weights_to_path(
                         self.get_weight_file_path(
                             best_train_loss_state_folder))
@@ -1033,12 +1061,15 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                          ylabel="Loss",
                          xlim=(first_epoch_to_plot, None))
             for key in l_keys:
-                s1.add_curve(yaxis=d_hist[key], legend=key)
-                if len(d_hist[key]) > first_epoch_to_plot:
-                    l_vals = d_hist[key][first_epoch_to_plot:]
-                    if not all(np.isnan(l_vals)):
-                        max_y_value = max(max_y_value, np.nanmax(l_vals))
-                        min_y_value = min(min_y_value, np.nanmin(l_vals))
+                # We skip the curves that are all NaN
+                hasValues = np.any(np.logical_not(np.isnan(d_hist[key])))
+                if hasValues:
+                    s1.add_curve(yaxis=d_hist[key], legend=key)
+                    if len(d_hist[key]) > first_epoch_to_plot:
+                        l_vals = d_hist[key][first_epoch_to_plot:]
+                        if not all(np.isnan(l_vals)):
+                            max_y_value = max(max_y_value, np.nanmax(l_vals))
+                            min_y_value = min(min_y_value, np.nanmin(l_vals))
             if max_y_value != -np.inf and min_y_value != np.inf:
                 margin = margin_coef * (max_y_value - min_y_value)
                 s1.ylim = (min_y_value - margin, max_y_value + margin)
