@@ -5,7 +5,7 @@ import pickle
 import tempfile
 from abc import ABC, abstractmethod
 from collections.abc import Sized
-from typing import Callable, Generic, TypeVar, Union
+from typing import Any, Callable, Generic, TypeVar, Union
 
 import numpy as np
 import torch
@@ -105,6 +105,48 @@ class LossLandscapeConfig():
         self.max_num_directions = max_num_directions
 
 
+class Diagnoser(ABC):
+    """Abstract base class for neural network diagnosers.
+    
+    The methods check_forward and check_backward are invoked right after
+    the forward and backward passes, respectively. They allow the user to 
+    perform custom checks while a batch is being processed.
+
+    """
+
+    @abstractmethod
+    def check_forward(self, model: 'NeuralNet', loss: torch.Tensor,
+                      data: tuple[InputType, TargetType], f_loss: LossFunType):
+        """
+        This function is invoked right after a forward pass. 
+
+        Args:
+            
+            `model`: instance of NeuralNet
+
+            `loss`: computed loss tensor. The result of running
+            model._get_loss(data, f_loss)
+
+            `data`: typ. a tuple of two elements. The first is an input batch
+            and the second a target batch. 
+
+            `f_loss`: loss function
+        
+        """
+        pass
+
+    @abstractmethod
+    def check_backward(self, model: 'NeuralNet', loss: torch.Tensor,
+                       data: tuple[InputType,
+                                   TargetType], f_loss: LossFunType):
+        """
+        This function is invoked right after the backward pass.
+
+        Args: same as in check_forward.
+        """
+        pass
+
+
 class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     """
     Type arguments:
@@ -184,7 +226,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         else:
             raise ValueError("Invalid normalizer type.")
 
+        # Other initializations
+        self._diagnoser: Union[None, Diagnoser] = None
+
     def initialize(self):
+        """
+        Any subclass of NeuralNet must call this function at the end of its
+        constructor.
+        """
         self._initialized = True
 
         if self.nn_folder is not None:
@@ -349,15 +398,29 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         for data in iterator:
 
             if optimizer:
+                # Forward pass
                 loss = self._get_loss(data,
                                       f_loss)  # vector of length batch_size
+                if self._diagnoser is not None:
+                    self._diagnoser.check_forward(self, loss, data, f_loss)
+
+                # Backward pass
+                self.zero_grad()
                 torch.mean(loss).backward()
+                if self._diagnoser is not None:
+                    self._diagnoser.check_backward(self, loss, data, f_loss)
+
+                # Weight update
                 optimizer.step()
-                optimizer.zero_grad()
+                optimizer.zero_grad(
+                )  # This line can probably be removed given that we clear the gradients before backward pass
             else:
                 with torch.no_grad():
+                    # Forward pass
                     loss = self._get_loss(
                         data, f_loss)  # vector of length batch_size
+                    if self._diagnoser is not None:
+                        self._diagnoser.check_forward(self, loss, data, f_loss)
 
             l_loss_this_epoch.append(loss.detach())
 
@@ -548,6 +611,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         #load_optimizer_state(initial_optimizer_state_file)
 
     def save_weights_to_path(self, path):
+        gsim_logger.info(f"Saving weights to {path}")
         torch.save({"weights": self.state_dict()}, path)
 
     def make_data_loader(self,
@@ -1039,6 +1103,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     self.load_weights_from_path(best_train_loss_weight_file)
 
         return d_hist
+
+    def set_diagnoser(self, diagnoser: Diagnoser | None):
+        """
+        If provided, the Diagnoser is used to analyze the network right after
+        every forward and backward pass. To disable diagnosing, just set it to
+        None. 
+        """
+        self._diagnoser = diagnoser
 
     def _move_to_device(self, obj: Union[torch.Tensor, list, tuple]):
         if isinstance(obj, torch.Tensor):
