@@ -342,7 +342,7 @@ class TestMultiFeatNormalizer:
                 nn_folder=temp_dir,
             )
 
-            normalizer2.load()
+            normalizer2.load_if_file_exists()
 
             # Check that parameters match via the property setters
             assert normalizer2.input_normalizers[0].mean == input_mean_before

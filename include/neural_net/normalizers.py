@@ -17,6 +17,8 @@ from tqdm import tqdm
 from .defs import InputType, OutputType, TargetType, LossFunType
 from gsim.gfigure import Subplot
 
+gsim_logger = logging.getLogger("gsim")
+
 
 class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
 
@@ -79,8 +81,24 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
         """
         self.nn_folder = nn_folder
 
-    @abstractmethod
+        # The following variable is True iff the normalizer has been fitted or
+        # its parameters have been loaded from a file.
+        self.are_parameters_set = False
+
     def fit(self, dataset: Dataset):
+        """
+        Fit the normalizer to the dataset.
+
+        Args:
+
+            `dataset`: dataset used to fit the normalizer.
+
+        """
+        self._fit(dataset)
+        self.are_parameters_set = True
+
+    @abstractmethod
+    def _fit(self, dataset: Dataset):
         pass
 
     def save(self):
@@ -98,8 +116,14 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
             with open(self.params_file, "wb") as f:
                 pickle.dump(d_params, f)
 
-    def load(self):
-        # Override if necessary
+    def load_if_file_exists(self):
+        """
+        This method can be overridden. In that case, recall to set
+        self.are_parameters_set to True. 
+        
+        However, it is preferable to to define setters and getters for the
+        parameters indicated by self.l_params_to_save. 
+        """
         if self.params_file is None or not os.path.exists(self.params_file):
             return
         with open(self.params_file, "rb") as f:
@@ -107,6 +131,8 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
             for param in self.l_params_to_save:
                 assert param in d_params, f"{param} not found in {self.params_file}."
                 setattr(self, param, d_params[param])
+        gsim_logger.info(f"Normalizer loaded from {self.params_file}")
+        self.are_parameters_set = True
 
     @property
     def params_file(self):
@@ -222,7 +248,7 @@ class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
         self.targets_batch_mean: torch.Tensor | None = None  # same shape as the targets
         self.targets_batch_std: torch.Tensor | None = None  # same shape as the targets
 
-    def fit(self, dataset: Dataset):
+    def _fit(self, dataset: Dataset):
 
         assert isinstance(dataset, Dataset)
 
@@ -656,7 +682,7 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
             for param, value in norm_state.items():
                 setattr(norm, param, value)
 
-    def fit(self, dataset: Dataset):
+    def _fit(self, dataset: Dataset):
         """
         Fit all FeatNormalizers using the dataset.
         

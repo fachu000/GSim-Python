@@ -32,7 +32,7 @@ def do_log_forward(model: nn.Module, loss: torch.Tensor):
     param_std = np.std(all_params_concat)
     param_max_abs = np.max(np.abs(all_params_concat))
 
-    logger.info(f"Forward pass: loss={loss_this_batch:.6f}, "
+    logger.info(f"Forward pass: batch_loss={loss_this_batch:.6f}, "
                 f"param_mean={param_mean:.6e}, param_std={param_std:.6e}, "
                 f"param_max_abs={param_max_abs:.6e}")
 
@@ -98,8 +98,9 @@ def do_log_backward(model: nn.Module):
     grad_inf_norm = np.max(np.abs(all_grads_concat))
 
     logger.info(
-        f"Backward pass: grad_mean={grad_mean:.2e}, "
-        f"grad_2_norm={grad_2_norm:.2e}, grad_inf_norm={grad_inf_norm:.2e}")
+        f"Backward pass: batch_grad_mean={grad_mean:.2e}, "
+        f"batch_grad_2_norm={grad_2_norm:.2e}, batch_grad_inf_norm={grad_inf_norm:.2e}"
+    )
 
 
 def gradient_norm(model: nn.Module) -> float:

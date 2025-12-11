@@ -246,9 +246,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     f"Weights loaded from {self.weight_file_path}")
                 if self.normalizer is not None:
                     normalizer = self.normalizer
-                    normalizer.load()
-                    gsim_logger.info(
-                        f"Normalizer loaded from {normalizer.params_file}")
+                    normalizer.load_if_file_exists()
             else:
                 gsim_logger.warning(
                     f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network will be initialized."
@@ -657,7 +655,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             lr_decay=.8,
             restart_optimizer_when_reducing_lr=False,
             eval_unnormalized_loss=False,
-            fit_normalizer=True,
+            fit_normalizer=None,
             obtain_static_training_loss=False,
             llc=LossLandscapeConfig()):
         """ 
@@ -670,6 +668,18 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         
         this function will attempt to load this state into the optimizer. To
         reset the optimizer state, just erase this file before invoking fit. 
+
+        NOTES:
+            - If you would like to reset the optimizer, erase/rename
+              optimizer.pth. 
+
+            - If you would like to fit the normalizer again, erase/rename
+              normalizer.pk.
+        
+            - If you change the dataset, erase/rename the hist.pk file. This is
+              because the losses change. If you do not do this, the weights will
+              not be saved until the values of the new (typ. validation) loss
+              are lower than the values of the old (validation) loss.
 
         Args:
 
@@ -693,8 +703,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
           loaded, or the state of a new optimizer otherwise) every time the
           learning rate is reduced. This may help escape local minima.
 
-          `fit_normalizer`: if True, the normalizer is fitted before training if
-          provided. 
+          `fit_normalizer`: deprecated. Delete/renam the file normalizer.pk if
+          you want to fit the normalizer again.
 
           `obtain_static_training_loss`: if True, the training loss is computed
           for fixed network weights at the end of each epoch. Otherwise, only
@@ -886,7 +896,6 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     'val_loss': [],
                     "lr": [],
                     "l_loss_landscapes": [],
-                    "ind_epoch": 0,
                     "unnormalized_train_loss": [],
                     "unnormalized_val_loss": [],
                 }
@@ -913,13 +922,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             l_unnormalized_loss_val.append(unnormalized_loss_val_this_epoch)
 
         def log_epoch_info(ind_epoch, num_epochs, ind_epoch_start,
-                           loss_train_me_this_epoch, loss_train_this_epoch,
-                           loss_val_this_epoch, optimizer):
-            str_log = (f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: " +
-                       f"train loss me = {loss_train_me_this_epoch:.4f}, ")
+                           l_loss_train_me, l_loss_train, l_loss_val,
+                           optimizer):
+            str_log = (
+                f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: " +
+                f"train loss me = {l_loss_train_me[-1]:.4f} (best {min(l_loss_train_me):.4f}), "
+            )
             if obtain_static_training_loss:
-                str_log += (f"train loss = {loss_train_this_epoch:.4f}, ")
-            str_log += f"val loss = {loss_val_this_epoch:.4f}, "
+                str_log += (
+                    f"train loss = {l_loss_train[-1]:.4f} (best {min(l_loss_train):.4f}), "
+                )
+            str_log += f"val loss = {l_loss_val[-1]:.4f}(best {min(l_loss_val):.4f}), "
             if eval_unnormalized_loss:
                 str_log += (f"unnormalized train loss = "
                             f"{l_unnormalized_loss_train[-1]:.4f}, ")
@@ -930,6 +943,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             gsim_logger.info(str_log)
 
         self._assert_initialized()
+        assert fit_normalizer is None, "Argument `fit_normalizer` is deprecated. Delete/rename the file normalizer.pk if you want to fit the normalizer again."
         torch.cuda.empty_cache()
 
         batch_size_eval = batch_size_eval if batch_size_eval else batch_size
@@ -956,12 +970,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         # Fit the normalizer
         if self.normalizer is not None:
-            if fit_normalizer:
+            if not self.normalizer.are_parameters_set:
                 gsim_logger.info("Fitting the normalizer...")
                 self.normalizer.fit(dataset_train)
                 self.normalizer.save()
             else:
-                gsim_logger.info("Skipping normalizer fitting as requested.")
+                gsim_logger.info(
+                    "The normalizer will not be fitted since its parameters have been loaded."
+                )
 
         # Instantiate the data loaders
         dataloader_train = self.make_data_loader(dataset_train, batch_size,
@@ -977,7 +993,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         l_loss_val = d_hist['val_loss']
         l_lr = d_hist['lr']
         l_llplots = d_hist['l_loss_landscapes']  # loss landscape plots
-        ind_epoch_start = d_hist['ind_epoch']
+        ind_epoch_start = len(l_loss_train_me)
         l_unnormalized_loss_train = d_hist['unnormalized_train_loss']
         l_unnormalized_loss_val = d_hist['unnormalized_val_loss']
 
@@ -1017,18 +1033,25 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             compute_unnormalized_losses(dataloader_train_eval, dataloader_val,
                                         f_loss)
 
-            log_epoch_info(ind_epoch, num_epochs, ind_epoch_start,
-                           loss_train_me_this_epoch, loss_train_this_epoch,
-                           loss_val_this_epoch, optimizer)
-
+            # The following lists should always have the same length
             l_loss_train_me.append(loss_train_me_this_epoch)
             l_loss_train.append(loss_train_this_epoch)
             l_loss_val.append(loss_val_this_epoch)
             l_lr.append(optimizer.param_groups[0]["lr"])
 
+            log_epoch_info(ind_epoch, num_epochs, ind_epoch_start,
+                           l_loss_train_me, l_loss_train, l_loss_val,
+                           optimizer)
+
             ind_epoch_best_loss_val = np.argmin(
                 [v if not np.isnan(v) else np.inf for v in l_loss_val])
             if ind_epoch_best_loss_val == ind_epoch:
+                # If you change the dataset, the losses change. So you need to
+                # erase the hist.pk file, else, the weights will not be saved
+                # until the values of the new validation loss are better than
+                # the values of the old validation loss.
+                gsim_logger.info(
+                    "⭐ NEW BEST validation loss | Saving checkpoint")
                 self.save_weights_to_path(
                     self.get_weight_file_path(best_val_loss_state_folder))
                 save_optimizer_state(
@@ -1046,8 +1069,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     break
 
             if lr_patience or not val:
-                # The weights should also be stored when val_split==0 since they
-                # need to be returned at the end.
+                # The weights should be stored:
+                #   - when there is lr_patience
+                #
+                #   - when there is no validation: this is because the best
+                # training weights need to be returned at the end.
                 ref_train_loss = loss_train_this_epoch if obtain_static_training_loss else loss_train_me_this_epoch
                 if ref_train_loss < best_train_loss:
                     best_train_loss = ref_train_loss
@@ -1084,7 +1110,6 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 'val_loss': l_loss_val,
                 "lr": l_lr,
                 "l_loss_landscapes": l_llplots,
-                "ind_epoch": ind_epoch,
                 "unnormalized_train_loss": l_unnormalized_loss_train,
                 "unnormalized_val_loss": l_unnormalized_loss_val,
             }
