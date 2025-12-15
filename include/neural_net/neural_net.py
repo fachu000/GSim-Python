@@ -252,7 +252,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network will be initialized."
                 )
 
-        self.to(device=self.device_type)
+        self.to(device=self.device_type, non_blocking=True)
 
     @abstractmethod
     def forward(self, x: InputType) -> OutputType:
@@ -605,7 +605,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                 weights_only=True,
                                 map_location=self.device_type)
         self.load_state_dict(checkpoint["weights"])
-        self.to(device=self.device_type)
+        self.to(device=self.device_type, non_blocking=True)
         #load_optimizer_state(initial_optimizer_state_file)
 
     def save_weights_to_path(self, path):
@@ -635,6 +635,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                           num_workers=self.num_workers,
                           pin_memory=(self.device_type == "cuda"),
                           multiprocessing_context=mp_context,
+                          persistent_workers=True,
                           collate_fn=functools.partial(
                               self.collate_and_normalize,
                               no_targets=no_targets))
@@ -775,8 +776,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             for input_batch, targets_batch in dataloader_train:
 
                 # 1. Compute the gradient
-                input_batch = input_batch.float().to(self.device_type)
-                targets_batch = targets_batch.float().to(self.device_type)
+                input_batch = input_batch.float().to(self.device_type, non_blocking=True)
+                targets_batch = targets_batch.float().to(self.device_type, non_blocking=True)
 
                 output_batch = self(input_batch.float())
                 loss = f_loss(output_batch.float(), targets_batch.float())
@@ -926,13 +927,13 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                            optimizer):
             str_log = (
                 f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: " +
-                f"train loss me = {l_loss_train_me[-1]:.4f} (best {min(l_loss_train_me):.4f}), "
+                f"train loss me = {l_loss_train_me[-1]:.4f} (best {np.nanmin(l_loss_train_me):.4f}), "
             )
             if obtain_static_training_loss:
                 str_log += (
-                    f"train loss = {l_loss_train[-1]:.4f} (best {min(l_loss_train):.4f}), "
+                    f"train loss = {l_loss_train[-1]:.4f} (best {np.nanmin(l_loss_train):.4f}), "
                 )
-            str_log += f"val loss = {l_loss_val[-1]:.4f}(best {min(l_loss_val):.4f}), "
+            str_log += f"val loss = {l_loss_val[-1]:.4f}(best {np.nanmin(l_loss_val):.4f}), "
             if eval_unnormalized_loss:
                 str_log += (f"unnormalized train loss = "
                             f"{l_unnormalized_loss_train[-1]:.4f}, ")
@@ -1045,7 +1046,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
             ind_epoch_best_loss_val = np.argmin(
                 [v if not np.isnan(v) else np.inf for v in l_loss_val])
-            if ind_epoch_best_loss_val == ind_epoch:
+            if val and ind_epoch_best_loss_val == ind_epoch:
                 # If you change the dataset, the losses change. So you need to
                 # erase the hist.pk file, else, the weights will not be saved
                 # until the values of the new validation loss are better than
@@ -1139,7 +1140,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
     def _move_to_device(self, obj: Union[torch.Tensor, list, tuple]):
         if isinstance(obj, torch.Tensor):
-            return obj.float().to(self.device_type)
+            return obj.float().to(self.device_type, non_blocking=True)
         elif isinstance(obj, (list, tuple)):
             return type(obj)(self._move_to_device(item) for item in obj)
         else:
@@ -1148,7 +1149,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     @staticmethod
     def _move_to_cpu(obj: Union[torch.Tensor, list, tuple]):
         if isinstance(obj, torch.Tensor):
-            return obj.detach().to("cpu")
+            return obj.detach().to("cpu", non_blocking=True)
         elif isinstance(obj, (list, tuple)):
             return type(obj)(NeuralNet._move_to_cpu(item) for item in obj)
         else:
