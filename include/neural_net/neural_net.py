@@ -252,7 +252,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network will be initialized."
                 )
 
-        self.to(device=self.device_type, non_blocking=True)
+        self.to(
+            device=self.device_type, non_blocking=self.device_type
+            != "mps")  # bug https://github.com/pytorch/pytorch/issues/139550
 
     @abstractmethod
     def forward(self, x: InputType) -> OutputType:
@@ -605,7 +607,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                 weights_only=True,
                                 map_location=self.device_type)
         self.load_state_dict(checkpoint["weights"])
-        self.to(device=self.device_type, non_blocking=True)
+        self.to(
+            device=self.device_type, non_blocking=self.device_type
+            != "mps")  # bug https://github.com/pytorch/pytorch/issues/139550
         #load_optimizer_state(initial_optimizer_state_file)
 
     def save_weights_to_path(self, path):
@@ -635,7 +639,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                           num_workers=self.num_workers,
                           pin_memory=(self.device_type == "cuda"),
                           multiprocessing_context=mp_context,
-                          persistent_workers=True,
+                          persistent_workers=self.num_workers > 0,
                           collate_fn=functools.partial(
                               self.collate_and_normalize,
                               no_targets=no_targets))
@@ -776,8 +780,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             for input_batch, targets_batch in dataloader_train:
 
                 # 1. Compute the gradient
-                input_batch = input_batch.float().to(self.device_type, non_blocking=True)
-                targets_batch = targets_batch.float().to(self.device_type, non_blocking=True)
+                input_batch = input_batch.float().to(
+                    self.device_type, non_blocking=self.device_type != "mps"
+                )  # bug https://github.com/pytorch/pytorch/issues/139550
+                targets_batch = targets_batch.float().to(
+                    self.device_type, non_blocking=self.device_type != "mps"
+                )  # bug https://github.com/pytorch/pytorch/issues/139550
 
                 output_batch = self(input_batch.float())
                 loss = f_loss(output_batch.float(), targets_batch.float())
@@ -1140,7 +1148,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
     def _move_to_device(self, obj: Union[torch.Tensor, list, tuple]):
         if isinstance(obj, torch.Tensor):
-            return obj.float().to(self.device_type, non_blocking=True)
+            return obj.float().to(
+                self.device_type, non_blocking=self.device_type !=
+                "mps")  # bug https://github.com/pytorch/pytorch/issues/139550
         elif isinstance(obj, (list, tuple)):
             return type(obj)(self._move_to_device(item) for item in obj)
         else:
@@ -1149,7 +1159,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     @staticmethod
     def _move_to_cpu(obj: Union[torch.Tensor, list, tuple]):
         if isinstance(obj, torch.Tensor):
-            return obj.detach().to("cpu", non_blocking=True)
+            return obj.detach().to(
+                "cpu", non_blocking=False
+            )  # bug https://github.com/pytorch/pytorch/issues/139550
         elif isinstance(obj, (list, tuple)):
             return type(obj)(NeuralNet._move_to_cpu(item) for item in obj)
         else:
