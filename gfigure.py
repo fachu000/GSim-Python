@@ -210,9 +210,13 @@ ARGUMENTS FOR SPECIFYING HOW TO SUBPLOT:
 
 """
 
+from collections.abc import Callable
 import copy
 import sys
 
+from matplotlib.axes import Axes
+from matplotlib.backend_bases import TimerBase
+from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -385,6 +389,7 @@ class Curve:
         self.xaxis = xaxis
         self.yaxis = yaxis
         self.mode = mode
+        self.line = None  # Handle to the plotted line
 
         # 2D
         self.ylower = ylower
@@ -422,7 +427,8 @@ class Curve:
             if self.yupper:
                 plot_band(self.yaxis, self.yupper)
 
-        if type(self.xaxis) == list and len(self.xaxis):
+        if ((type(self.xaxis) == list) or
+            (type(self.xaxis) == np.ndarray)) and len(self.xaxis):
             axis_args = (self.xaxis, self.yaxis)
         else:
             axis_args = (self.yaxis, )
@@ -433,7 +439,7 @@ class Curve:
                                                                   == 'stem'):
 
             def plot_fun(*args, **kwargs):
-                return plt.stem(*args, **kwargs, use_line_collection=True)
+                return plt.stem(*args, **kwargs)
 
             # stem does not take 'color' as an argument, but the color may be
             # specified through `style`
@@ -455,11 +461,21 @@ class Curve:
                 kwargs = dict()
             style = style.split("#")[0]
 
-            plt.plot(*axis_args, style, label=self.legend_str, **kwargs)
+            if hasattr(self, 'line') and (self.line is not None):
+                # The curve has been plotted before. Update the data.
+                self.line.set_xdata(axis_args[0])
+                self.line.set_ydata(axis_args[1])
+                self.line.set_label(self.legend_str)
+            else:
+                # First time the curve is plotted.
+                self.line, = plt.plot(*axis_args,
+                                      style,
+                                      label=self.legend_str,
+                                      **kwargs)
 
-    def _plot_3D(self, axis=None, interpolation="none", zlim=None):
+    def _plot_3D(self, axes=None, interpolation="none", zlim=None):
 
-        assert axis
+        assert axes
 
         # Default mode
         if not hasattr(self, 'mode') or (self.mode is None):
@@ -484,7 +500,7 @@ class Curve:
         if self.mode == 'imshow':
             aspect = (m_X[-1, -1] - m_X[-1, 0]) / (m_Y[-1, 0] - m_Y[0, 0]) if (
                 hasattr(self, "aspect") and self.aspect == "square") else None
-            self.image = axis.imshow(
+            self.image = axes.imshow(
                 m_Z,
                 interpolation=self.zinterpolation,
                 cmap='jet',
@@ -494,11 +510,11 @@ class Curve:
                 aspect=aspect,
                 vmin=zlim[0] if zlim else None)
         elif self.mode == 'contour3D':
-            self.image = axis.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
+            self.image = axes.contour3D(m_X, m_Y, m_Z, 50, cmap='plasma')
             if zlim is not None:
-                axis.set_zlim(zlim[0], zlim[1])
+                axes.set_zlim(zlim[0], zlim[1])
         elif self.mode == 'surface':
-            self.image = axis.plot_surface(m_X,
+            self.image = axes.plot_surface(m_X,
                                            m_Y,
                                            m_Z,
                                            rstride=1,
@@ -506,7 +522,7 @@ class Curve:
                                            cmap='viridis',
                                            edgecolor='none')
             if zlim is not None:
-                axis.set_zlim(zlim[0], zlim[1])
+                axes.set_zlim(zlim[0], zlim[1])
         else:
             raise ValueError(f'Unrecognized 3D plotting mode. Got {self.mode}')
 
@@ -610,6 +626,7 @@ class Subplot:
         self.num_legend_cols = num_legend_cols
         self.l_curves: list[Curve] = []
         self.sharex = sharex
+        self.axes: Axes | None = None  # Handle to the subplot axis
         if create_curves:
             self.add_curve(**kwargs)
 
@@ -875,42 +892,47 @@ class Subplot:
 
         return l_xaxis, l_yaxis
 
-    def plot(self, **kwargs):
+    def plot(self, *subplot_args, **subplot_kwargs):
+
+        if not hasattr(self, 'axes'):  # backwards compatibility
+            self.axes = None
+
+        if (self.axes is None):
+            self.axes = plt.subplot(*subplot_args, **subplot_kwargs)
 
         for curve in self.l_curves:
             curve.plot(
                 zlim=self.zlim
                 if hasattr(self, "zlim") else None,  # backwards comp.
-                **kwargs)
+                axes=self.axes)
 
         if not Curve.legend_is_empty(self.l_curves):
             if not hasattr(self, "legend_loc"):
                 self.legend_loc = None  # backwards compatibility
             if not hasattr(self, "num_legend_cols"):
                 self.num_legend_cols = 1
-            plt.legend(loc=self.legend_loc, ncol=self.num_legend_cols)
+            self.axes.legend(loc=self.legend_loc, ncol=self.num_legend_cols)
 
         # Axis labels
-        plt.xlabel(self.xlabel)
-        plt.ylabel(self.ylabel)
-
+        self.axes.set_xlabel(self.xlabel)
+        self.axes.set_ylabel(self.ylabel)
         # X ticks
-        if hasattr(self, "xticks"):
-            plt.xticks(self.xticks)
+        if hasattr(self, "xticks") and self.xticks is not None:
+            self.axes.set_xticks(self.xticks)
 
         if hasattr(self, "num_xticks_decimal_places"
                    ) and self.num_xticks_decimal_places is not None:
             import matplotlib.ticker as ticker
-            plt.gca().xaxis.set_major_formatter(
+            self.axes.xaxis.set_major_formatter(
                 ticker.FormatStrFormatter(
                     f'%.{self.num_xticks_decimal_places}f'))
 
         # Y ticks
-        if hasattr(self, "yticks"):
-            plt.yticks(self.yticks)
+        if hasattr(self, "yticks") and self.yticks is not None:
+            self.axes.set_yticks(self.yticks)
 
         if self.projection == '3d' and hasattr(self, 'zlabel') and self.zlabel:
-            plt.gca().set_zlabel(self.zlabel)
+            self.axes.set_zlabel(self.zlabel)
 
         # Color bar
         if hasattr(self, "color_bar") and self.color_bar:
@@ -923,23 +945,32 @@ class Subplot:
                 cbar.set_label(self.zlabel)
 
         if self.title:
-            plt.title(self.title)
+            self.axes.set_title(self.title)
 
         if "grid" in dir(self):  # backwards compatibility
-            plt.grid(self.grid)
+            self.axes.grid(self.grid)
 
         if "xlim" in dir(self):  # backwards compatibility
             if self.xlim:
-                plt.xlim(self.xlim)
+                self.axes.set_xlim(self.xlim)
+            else:
+                # Automatic x-limits
+                self.axes.autoscale(enable=True, axis='x')
+                self.axes.relim()
+                self.axes.autoscale_view(scalex=True, scaley=False)
 
         if "ylim" in dir(self):  # backwards compatibility
             if self.ylim:
                 if isinstance(self.ylim, float):
-                    plt.ylim(self.get_auto_ylims(self.ylim))
+                    self.axes.set_ylim(self.get_auto_ylims(self.ylim))
                 else:
-                    plt.ylim(self.ylim)
+                    self.axes.set_ylim(self.ylim)
+            else:
+                # Automatic y-limits
+                if not self.is_3D:  # For images, the following line does not work well, so we skip it
+                    self.axes.set_ylim(self.get_auto_ylims(.2))
 
-        return
+        return self.axes
 
     def get_image(self):
         """Scans l_curves to see if one has defined the attribute "image". If
@@ -1043,6 +1074,15 @@ class GFigure:
         self.global_color_bar_label = global_color_bar_label
         self.global_color_bar_position = global_color_bar_position
 
+        self.plt_fig: Figure | None = None  # Handle to the plt.figure object
+
+        # Animations
+        self.f_update: Callable[
+            [],
+            bool] | None = None  # Function to update the figure. It returns True if the animation should stop.
+        self.animation_interval = 50  # in milliseconds
+        self._animation_has_started = False  # Whether the animation is running
+
         if layout == "" or layout == "tight":
             self.layout = layout
         else:
@@ -1132,6 +1172,9 @@ class GFigure:
 
     def plot(self):
 
+        if "plt_fig" not in dir(self):  # backwards compatibility
+            self.plt_fig = None
+
         # backwards compatibility
         if "figsize" not in dir(self):
             figsize = None
@@ -1140,7 +1183,10 @@ class GFigure:
         if figsize is None:
             figsize = default_figsize
 
-        F = plt.figure(figsize=figsize)
+        if self.plt_fig is None:
+            # Create the figure only if it does not exist. If it exists, it is
+            # because we are dynamically replotting a figure.
+            self.plt_fig = plt.figure(figsize=figsize)
 
         # Determine the number of rows and columns for arranging the subplots
         num_axes = len(self.l_subplots)
@@ -1175,15 +1221,13 @@ class GFigure:
         for index, subplot in enumerate(self.l_subplots):
             if index > 0:
                 prev_axis = axis
-            axis = plt.subplot(
-                self.num_subplot_rows,
-                self.num_subplot_columns,
-                index + 1,
-                sharex=prev_axis if index > 0 and subplot.sharex else None,
-                projection=self.l_subplots[index].projection)
             if self.l_subplots[index] is not None:
-
-                self.l_subplots[index].plot(axis=axis)
+                axis = self.l_subplots[index].plot(
+                    self.num_subplot_rows,
+                    self.num_subplot_columns,
+                    index + 1,
+                    sharex=prev_axis if index > 0 and subplot.sharex else None,
+                    projection=self.l_subplots[index].projection)
 
         # Layout
         if hasattr(self, "layout"):  # backwards compatibility
@@ -1201,15 +1245,36 @@ class GFigure:
                 image = subplot.get_image()
                 if image:
                     break
-            F.subplots_adjust(right=0.85)
+            self.plt_fig.subplots_adjust(right=0.85)
 
-            cbar_ax = F.add_axes(self.global_color_bar_position)
-            cbar = F.colorbar(image, cax=cbar_ax)
+            cbar_ax = self.plt_fig.add_axes(self.global_color_bar_position)
+            cbar = self.plt_fig.colorbar(image, cax=cbar_ax)
 
             if self.global_color_bar_label:
                 cbar.set_label(self.global_color_bar_label)
 
-        return F
+        # This is needed if we are updating the figure
+        self.plt_fig.canvas.draw_idle()
+
+        # Animations
+        if hasattr(self, "f_update") and (self.f_update is not None):
+            if not self._animation_has_started:
+                self._animation_has_started = True
+                timer = self.plt_fig.canvas.new_timer(
+                    interval=self.animation_interval)
+
+                def update():
+                    # This wrapper allows f_update to receive the timer to
+                    # stop the animation if needed.
+                    assert self.f_update is not None
+                    if self.f_update():
+                        timer.stop()
+                    self.plot()
+
+                timer.add_callback(update)
+                timer.start()
+
+        return self.plt_fig
 
     @staticmethod
     def concatenate(it_gfigs,
@@ -1278,6 +1343,55 @@ class GFigure:
         zlims = [np.nanmin(l_zlims), np.nanmax(l_zlims)]
         for subplot in self.l_subplots:
             subplot.zlim = zlims
+
+    @staticmethod
+    def make_periodically_refreshing_figure(
+            f_make_figure: Callable[[], "GFigure|None"],
+            interval: int = 1000,  # ms
+    ):
+        """Creates a GFigure that refreshes itself automatically by calling
+        `f_make_figure` every `interval` milliseconds.
+
+        Args:
+
+            - f_make_figure: function that returns a GFigure object. To stop the
+              animation, return None. 
+
+            - interval: refresh interval in milliseconds.
+
+        Returns:
+            - gfig: GFigure object that refreshes itself automatically.
+        
+        """
+
+        def copy_plt_refs(gfig_src: GFigure, gfig_dest: GFigure):
+            """Copies the plt figure, axes, and line references from gfig_src to
+            gfig_dest. 
+            """
+            gfig_dest.plt_fig = gfig_src.plt_fig
+            for subplot_src, subplot_dest in zip(gfig_src.l_subplots,
+                                                 gfig_dest.l_subplots):
+                if subplot_src is not None and subplot_dest is not None:
+                    subplot_dest.axes = subplot_src.axes
+                    for curve_src, curve_dest in zip(subplot_src.l_curves,
+                                                     subplot_dest.l_curves):
+                        curve_dest.line = curve_src.line
+
+        gfig = f_make_figure()
+
+        def f_update() -> bool:
+            nonlocal gfig, f_make_figure
+            new_fig = f_make_figure()
+            if new_fig is None:
+                return True  # Stop the animation
+            copy_plt_refs(gfig, new_fig)
+            gfig.l_subplots = new_fig.l_subplots
+            return False  # Do not stop the animation
+
+        gfig.f_update = f_update
+        gfig.animation_interval = interval
+
+        return gfig
 
 
 def plot_example_figure(ind_example):
@@ -1575,6 +1689,57 @@ def plot_example_figure(ind_example):
                              style='g--',
                              legend_str='Green vertical lines')
 
+    elif ind_example == 15:
+        # Example of figure that is updated over time (animation). For a figure
+        # that is automatically recreated, see the example below.
+        n = 2
+        v_x = np.linspace(0, n, 100)
+        G = GFigure(xaxis=v_x,
+                    yaxis=np.sin(v_x) * v_x,
+                    xlabel="x",
+                    title="Plot that changes over time",
+                    legend=f"n = {n}")
+
+        def f_update():
+            # Modify the data in the GFigure object
+            print("Updating plot...")
+            nonlocal n
+            n += .3
+            if n > 30:
+                return True  # Stop the animation
+            v_x = np.linspace(0, n, 100)
+            G.l_subplots[0].l_curves[0].xaxis = v_x
+            G.l_subplots[0].l_curves[0].yaxis = np.sin(v_x) * v_x
+            G.l_subplots[0].l_curves[0].legend_str = f"n = {n}"
+            return False
+
+        G.f_update = f_update
+        G.animation_interval = 50  # milliseconds
+
+    elif ind_example == 16:
+        # Figure that automatically refreshes. It avoids the need for separate
+        # code for creating the figure and updating it.
+        n = 2
+
+        def make_figure():
+            nonlocal n
+            v_x = np.linspace(0, n, 100)
+            G = GFigure(xaxis=v_x,
+                        yaxis=np.sin(v_x) * v_x,
+                        xlabel="x",
+                        title="Plot that changes over time",
+                        legend=f"sin(x)*x, n = {n:.3g}")
+            G.add_curve(xaxis=v_x,
+                        yaxis=-np.sin(v_x) * v_x,
+                        legend=f"-sin(x)*x, n = {n:.3g}")
+            n += .3
+            if n > 30:
+                return None  # Stop the animation
+            return G
+
+        G = GFigure.make_periodically_refreshing_figure(make_figure,
+                                                        interval=50)
+
     else:
         raise ValueError("Invalid example index")
 
@@ -1582,11 +1747,27 @@ def plot_example_figure(ind_example):
     plt.show()
 
 
+def plot_all_example_figures():
+    ind_example = 1
+    while True:
+        try:
+            print(f"Plotting example figure {ind_example}...")
+            plot_example_figure(ind_example)
+            ind_example += 1
+        except ValueError:
+            print("No more example figures.")
+            break
+
+
 if __name__ == '__main__':
     if len(sys.argv) != 2:
         print("""Usage from command line: 
 $ python3 gfigure.py <example_index>
             
-where <example_index> is an integer. See function `example_figures`.""")
+where <example_index> is an integer or "all". See function `example_figures`."""
+              )
     else:
-        plot_example_figure(int(sys.argv[1]))
+        if sys.argv[1] == "all":
+            plot_all_example_figures()
+        else:
+            plot_example_figure(int(sys.argv[1]))
