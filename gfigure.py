@@ -280,42 +280,42 @@ class Curve:
                  aspect=None):
         """
 
-      See GFigure.__init__ for more information.
+        See GFigure.__init__ for more information.
 
-      1. For 2D plots:
-      ---------------
+        1. For 2D plots:
+        ---------------
 
-      xaxis : None or a list of a numeric type. In the latter case, its length 
-          equals the length of yaxis.
+        xaxis : None or a list of a numeric type. In the latter case, its length 
+            equals the length of yaxis.
 
-      yaxis : list of a numeric type. 
+        yaxis : list of a numeric type. 
 
-      zaxis : None
+        zaxis : None
 
-      ylower, yupper: [] or lists of a numeric type with the same length as
-      yaxis.
+        ylower, yupper: [] or lists of a numeric type with the same length as
+        yaxis.
 
-      mode : can be 'plot' or 'stem'
+        mode : can be 'plot' or 'stem'
 
-      aspect: can be 'square' or take the values in plt.imshow. It applies only
-      to imshow. 
+        aspect: can be 'square' or take the values in plt.imshow. It applies only
+        to imshow. 
 
-      2. For 3D plots:
-      ----------------
+        2. For 3D plots:
+        ----------------
 
-      xaxis: M x N numpy array
+        xaxis: M x N numpy array
 
-      yaxis: M x N numpy array
+        yaxis: M x N numpy array
 
-      zaxis: M x N numpy array
+        zaxis: M x N numpy array
 
-      zinterpolation: see GFigure.__init__
+        zinterpolation: see GFigure.__init__
 
-      Other arguments
-      ---------------
+        Other arguments
+        ---------------
 
-      style : see the docstring of GFigure
-      """
+        style : see the docstring of GFigure
+        """
 
         # Input check
         if zaxis is None:
@@ -510,8 +510,8 @@ class Curve:
         else:
             raise ValueError(f'Unrecognized 3D plotting mode. Got {self.mode}')
 
+    @staticmethod
     def legend_is_empty(l_curves):
-
         for curve in l_curves:
             if curve.legend_str != "":
                 return False
@@ -534,6 +534,39 @@ class Curve:
     @property
     def is_3D(self):
         return hasattr(self, "zaxis") and self.zaxis is not None
+
+    def __len__(self):
+        return len(self.yaxis) if self.yaxis is not None else 0
+
+
+class VerticalLinesCurve(Curve):
+
+    def __init__(self,
+                 subplot: 'Subplot',
+                 x_positions,
+                 legend_str="",
+                 style="k--"):
+        super().__init__(xaxis=[],
+                         yaxis=[],
+                         legend_str=legend_str,
+                         style=style)
+        self.subplot = subplot  # Required to determine the y limits
+        self.x_positions = x_positions
+
+    def plot(self, **kwargs):
+
+        # Ensure the y-limits of the subplot are defined
+        if self.subplot.ylim is None:
+            self.subplot.ylim = self.subplot.get_auto_ylims(.2)
+        ymin, ymax = self.subplot.ylim
+
+        self.xaxis = []
+        self.yaxis = []
+        for x in self.x_positions:
+            self.xaxis += [x, x, np.nan]
+            self.yaxis += [ymin, ymax, np.nan]
+
+        super()._plot_2D()
 
 
 class Subplot:
@@ -631,6 +664,9 @@ class Subplot:
                       zinterpolation=zinterpolation,
                       mode=mode,
                       aspect=aspect))
+
+    def add_vertical_lines(self, *args, **kwargs):
+        self.l_curves.append(VerticalLinesCurve(subplot=self, *args, **kwargs))
 
     def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
                                      legend, mode):
@@ -899,7 +935,7 @@ class Subplot:
         if "ylim" in dir(self):  # backwards compatibility
             if self.ylim:
                 if isinstance(self.ylim, float):
-                    plt.ylim(self.get_auto_ylims())
+                    plt.ylim(self.get_auto_ylims(self.ylim))
                 else:
                     plt.ylim(self.ylim)
 
@@ -932,7 +968,7 @@ class Subplot:
                 return True
         return False
 
-    def get_auto_ylims(self):
+    def get_auto_ylims(self, ylim_factor):
         """Returns automatic y-limits based on the curves in self.l_curves. 
         
         It first finds the minimum and maximum y-values among all 2D curves
@@ -941,11 +977,13 @@ class Subplot:
         Then returns (y_min - self.ylim * (y_max - y_min), y_max + self.ylim *
         (y_max - y_min)).
         """
-        assert isinstance(self.ylim, float), "self.ylim must be a float"
+        assert isinstance(ylim_factor, float), "ylim_factor must be a float"
 
         y_min = sys.float_info.max
         y_max = -sys.float_info.max
         for curve in self.l_curves:
+            if len(curve) == 0:
+                continue
             if not curve.is_3D:
                 # 2D curve
                 if curve.xaxis is None or (type(curve.xaxis) == list
@@ -969,7 +1007,7 @@ class Subplot:
             raise ValueError(
                 "Could not determine automatic y-limits; no 2D curves found.")
         y_range = y_max - y_min
-        return (y_min - self.ylim * y_range, y_max + self.ylim * y_range)
+        return (y_min - ylim_factor * y_range, y_max + ylim_factor * y_range)
 
 
 class GFigure:
@@ -1017,8 +1055,7 @@ class GFigure:
         """
          Similar arguments to __init__ above.
 
-
-      """
+        """
 
         # Modify ind_active_subplot only if provided
         if ind_active_subplot is not None:
@@ -1026,6 +1063,21 @@ class GFigure:
 
         self.select_subplot(self.ind_active_subplot, **kwargs)
         self.l_subplots[self.ind_active_subplot].add_curve(*args, **kwargs)
+
+    def add_vertical_lines(self, *args, ind_active_subplot=None, **kwargs):
+        """ 
+        Wrapper for Subplot.add_vertical_lines.
+
+        """
+
+        # Modify ind_active_subplot only if provided
+        if ind_active_subplot is not None:
+            self.ind_active_subplot = ind_active_subplot
+
+        self.select_subplot(self.ind_active_subplot)
+
+        self.l_subplots[self.ind_active_subplot].add_vertical_lines(
+            *args, **kwargs)
 
     def add_histogram_curve(self,
                             data,
@@ -1506,6 +1558,22 @@ def plot_example_figure(ind_example):
                        title="With y-limit specification",
                        xlim=(2, 4),
                        ylim=0.2)  # enables autoscaling
+
+    elif ind_example == 14:
+        # Example with vertical lines
+        v_x = np.linspace(0, 10, 100)
+        v_y = np.sin(v_x)
+        G = GFigure(xaxis=v_x,
+                    yaxis=v_y,
+                    xlabel="x",
+                    ylabel="f(x)",
+                    title="Figure with vertical lines")
+        G.add_vertical_lines(x_positions=[2, 4, 6, 8],
+                             style='r--',
+                             legend_str='Red vertical lines')
+        G.add_vertical_lines(x_positions=[3, 5, 7, 9],
+                             style='g--',
+                             legend_str='Green vertical lines')
 
     else:
         raise ValueError("Invalid example index")
