@@ -212,6 +212,7 @@ ARGUMENTS FOR SPECIFYING HOW TO SUBPLOT:
 
 from collections.abc import Callable
 import copy
+import logging
 import sys
 
 from matplotlib.axes import Axes
@@ -224,6 +225,7 @@ title_to_caption = False
 default_figsize = None  # `None` lets plt choose
 
 default_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+gsim_logger = logging.getLogger("gsim")
 """ 
 TODO: 
 
@@ -463,8 +465,12 @@ class Curve:
 
             if hasattr(self, 'line') and (self.line is not None):
                 # The curve has been plotted before. Update the data.
-                self.line.set_xdata(axis_args[0])
-                self.line.set_ydata(axis_args[1])
+                if len(axis_args) == 1:
+                    self.line.set_ydata(axis_args[0])
+                elif len(axis_args) == 2:
+                    self.line.set_data(axis_args[0], axis_args[1])
+                else:
+                    raise ValueError("Invalid number of axis arguments.")
                 self.line.set_label(self.legend_str)
             else:
                 # First time the curve is plotted.
@@ -529,7 +535,7 @@ class Curve:
     @staticmethod
     def legend_is_empty(l_curves):
         for curve in l_curves:
-            if curve.legend_str != "":
+            if curve.legend_str != "" and curve.legend_str[0] != "_":
                 return False
         return True
 
@@ -571,16 +577,26 @@ class VerticalLinesCurve(Curve):
 
     def plot(self, **kwargs):
 
-        # Ensure the y-limits of the subplot are defined
-        if self.subplot.ylim is None:
-            self.subplot.ylim = self.subplot.get_auto_ylims(.2)
-        ymin, ymax = self.subplot.ylim
+        if len(self.x_positions) == 0:
+            # This is to allow placeholders for vertical lines. This is
+            # necessary with animations: sometimes there are no vertical lines
+            # to plot initially, but they may appear later.
+            self.xaxis = [np.nan]
+            self.yaxis = [np.nan]
+        else:
+            # Ensure the y-limits of the subplot are defined
+            if self.subplot.ylim is None:
+                try:
+                    self.subplot.ylim = self.subplot.get_auto_ylims(.2)
+                except ValueError:
+                    self.subplot.ylim = (0, 1)
+            ymin, ymax = self.subplot.ylim
 
-        self.xaxis = []
-        self.yaxis = []
-        for x in self.x_positions:
-            self.xaxis += [x, x, np.nan]
-            self.yaxis += [ymin, ymax, np.nan]
+            self.xaxis = []
+            self.yaxis = []
+            for x in self.x_positions:
+                self.xaxis += [x, x, np.nan]
+                self.yaxis += [ymin, ymax, np.nan]
 
         super()._plot_2D()
 
@@ -688,11 +704,38 @@ class Subplot:
     def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
                                      legend, mode):
 
+        def expand_default_xaxes(l_xaxis, l_yaxis):
+            """
+            Expands the default xaxes in l_xaxis. That is, if an entry of
+            l_xaxis is None or [], it is replaced with the default xaxis for the
+            corresponding entry of l_yaxis.
+
+            We need to expand the default axes because of animations. Else, if
+            the user specifies a default xaxis and then he/she changes the
+            lenght of `yaxis`, the default xaxis would not be updated and an
+            error would be raised as matplotlib would try to plot a curve where
+            the x and y axes have different lengths.
+            """
+
+            def expand_default_xaxis(xax, yax):
+                """If xax is None or [], it returns the default xaxis for the
+                provided yax. Else, it returns xax.
+                """
+                if xax is None or (type(xax) == list and len(xax) == 0):
+                    return list(range(0, len(yax)))
+                else:
+                    return xax
+
+            for ind in range(0, len(l_yaxis)):
+                l_xaxis[ind] = expand_default_xaxis(l_xaxis[ind], l_yaxis[ind])
+            return l_xaxis
+
         # Process the subplot input.  Each entry of xaxis can be
         # either None (use default x-axis) or a list of float. Each
         # entry of yaxis is a list of float. Both xaxis and
         # yaxis will have the same length.
         l_xaxis, l_yaxis = Subplot._list_from_axis_arguments(xaxis, yaxis)
+        l_xaxis = expand_default_xaxes(l_xaxis, l_yaxis)
         # Each entry of `l_ylower` and `l_yupper` is either None (do
         # not shade any area) or a list of float.
         l_ylower, _ = Subplot._list_from_axis_arguments(ylower, yaxis)
@@ -898,7 +941,10 @@ class Subplot:
             self.axes = None
 
         if (self.axes is None):
+            regenerating = False
             self.axes = plt.subplot(*subplot_args, **subplot_kwargs)
+        else:
+            regenerating = True
 
         for curve in self.l_curves:
             curve.plot(
@@ -952,7 +998,14 @@ class Subplot:
 
         if "xlim" in dir(self):  # backwards compatibility
             if self.xlim:
-                self.axes.set_xlim(self.xlim)
+                if regenerating and type(self.xlim) == tuple and np.any(
+                    [val is None for val in self.xlim]):
+                    gsim_logger.warning(
+                        "Regeneration not implemented for xlim with None values."
+                    )
+                if self.xlim[0] != self.xlim[
+                        1]:  # Avoids a warning if limits are equal
+                    self.axes.set_xlim(self.xlim)
             else:
                 # Automatic x-limits
                 self.axes.autoscale(enable=True, axis='x')
@@ -967,9 +1020,16 @@ class Subplot:
                     self.axes.set_ylim(self.ylim)
             else:
                 # Automatic y-limits
-                if not self.is_3D:  # For images, the following line does not work well, so we skip it
-                    self.axes.set_ylim(self.get_auto_ylims(.2))
-
+                if regenerating:
+                    if not self.is_3D:  # For images, the following line does not work well, so we skip it
+                        if len(self.l_curves):
+                            try:
+                                ylims = self.get_auto_ylims(.2)
+                                if ylims[0] != ylims[
+                                        1]:  # Avoids a warning if a curve is constant.
+                                    self.axes.set_ylim(ylims)
+                            except ValueError:
+                                pass
         return self.axes
 
     def get_image(self):
@@ -1032,6 +1092,8 @@ class Subplot:
                         continue
                     y_vals = y_vals[ind_within_xlim]
 
+                if len([val for val in y_vals if not np.isnan(val)]) == 0:
+                    continue
                 y_min = min(y_min, np.nanmin(y_vals))
                 y_max = max(y_max, np.nanmax(y_vals))
         if y_min == sys.float_info.max or y_max == -sys.float_info.max:
@@ -1693,7 +1755,7 @@ def plot_example_figure(ind_example):
         # Example of figure that is updated over time (animation). For a figure
         # that is automatically recreated, see the example below.
         n = 2
-        v_x = np.linspace(0, n, 100)
+        v_x = np.arange(0, n, .1)
         G = GFigure(xaxis=v_x,
                     yaxis=np.sin(v_x) * v_x,
                     xlabel="x",
@@ -1707,7 +1769,7 @@ def plot_example_figure(ind_example):
             n += .3
             if n > 30:
                 return True  # Stop the animation
-            v_x = np.linspace(0, n, 100)
+            v_x = np.arange(0, n, .1)
             G.l_subplots[0].l_curves[0].xaxis = v_x
             G.l_subplots[0].l_curves[0].yaxis = np.sin(v_x) * v_x
             G.l_subplots[0].l_curves[0].legend_str = f"n = {n}"
@@ -1723,7 +1785,7 @@ def plot_example_figure(ind_example):
 
         def make_figure():
             nonlocal n
-            v_x = np.linspace(0, n, 100)
+            v_x = np.arange(0, n, .1)
             G = GFigure(xaxis=v_x,
                         yaxis=np.sin(v_x) * v_x,
                         xlabel="x",
