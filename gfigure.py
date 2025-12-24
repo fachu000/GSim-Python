@@ -1017,7 +1017,9 @@ class Subplot:
                 if isinstance(self.ylim, float):
                     self.axes.set_ylim(self.get_auto_ylims(self.ylim))
                 else:
-                    self.axes.set_ylim(self.ylim)
+                    if self.ylim[0] != self.ylim[
+                            1]:  # Avoids a warning if limits are equal
+                        self.axes.set_ylim(self.ylim)
             else:
                 # Automatic y-limits
                 if regenerating:

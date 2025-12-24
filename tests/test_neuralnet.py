@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import Dataset
 
 from gsim.include.neural_net import NeuralNet
+from gsim.include.neural_net.neural_net import TrainingHistory
 
 
 # Helper network definitions (defined at module level to be picklable)
@@ -47,6 +48,7 @@ class _SimpleNetworkListTuple(NeuralNet[list[torch.Tensor], tuple[torch.Tensor,
         return (out_1, out_2)
 
 
+# Tests for uncollate_fn ######################################################
 def test_uncollate_fn_when_output_is_a_tuple():
     # In this test, the output of the network is a tuple of three tensors.
 
@@ -132,6 +134,7 @@ def test_uncollate_fn_when_output_is_a_tensor():
     print("hello")
 
 
+# Tests for predict ###########################################################
 def test_predict_when_input_and_output_are_tensors():
 
     net = _SimpleNetworkTensor()
@@ -216,3 +219,81 @@ def test_predict_when_the_input_is_a_list_and_the_output_is_a_tuple():
         assert len(prev_output) == 2
         assert torch.equal(current_output[0], prev_output[0])
         assert torch.equal(current_output[1], prev_output[1])
+
+
+# Tests for get_session_history_steps ########################################
+def test_get_session_history_steps_example_1():
+    hist = TrainingHistory()
+    hist.l_step_inds_started_training = [0, 5000, 12000, 18000]
+    hist.l_step_inds_checkpoints = [2000, 4000, 8000, 10000, 15000]
+
+    result = NeuralNet.get_session_history_steps(hist)
+    expected = [(0, 4001), (5000, 10001), (12000, 15001)]
+
+    assert result == expected
+
+
+def test_get_session_history_steps_example_2():
+    hist = TrainingHistory()
+    hist.l_step_inds_started_training = [0, 5000, 12000]
+    hist.l_step_inds_checkpoints = [2000, 4000, 5000, 14000]
+
+    result = NeuralNet.get_session_history_steps(hist)
+    expected = [(0, 4001), (5000, 5001)]
+
+    assert result == expected
+
+
+def test_get_session_history_steps_single_session():
+    hist = TrainingHistory()
+    hist.l_step_inds_started_training = [0]
+    hist.l_step_inds_checkpoints = [1000, 2000, 3000]
+
+    result = NeuralNet.get_session_history_steps(hist)
+    expected = []
+
+    assert result == expected
+
+
+def test_get_session_history_steps_no_checkpoints():
+    hist = TrainingHistory()
+    hist.l_step_inds_started_training = [0, 1000, 2000]
+    hist.l_step_inds_checkpoints = []
+
+    result = NeuralNet.get_session_history_steps(hist)
+    expected = []
+
+    assert result == expected
+
+
+def test_get_session_history_steps_checkpoint_at_session_start():
+    hist = TrainingHistory()
+    hist.l_step_inds_started_training = [0, 1000, 2000]
+    hist.l_step_inds_checkpoints = [500, 1000, 1500]
+
+    result = NeuralNet.get_session_history_steps(hist)
+    expected = [(0, 501), (1000, 1501)]
+
+    assert result == expected
+
+
+def test_get_session_history_steps_multiple_checkpoints_per_session():
+    hist = TrainingHistory()
+    hist.l_step_inds_started_training = [0, 5000, 10000]
+    hist.l_step_inds_checkpoints = [1000, 2000, 3000, 4000, 6000, 7000, 8000]
+
+    result = NeuralNet.get_session_history_steps(hist)
+    expected = [(0, 4001), (5000, 8001)]
+
+    assert result == expected
+
+
+def test_get_session_history_steps_empty_history():
+    hist = TrainingHistory()
+    hist.l_step_inds_started_training = []
+    hist.l_step_inds_checkpoints = []
+
+    result = NeuralNet.get_session_history_steps(hist)
+    expected = []
+
+    assert result == expected

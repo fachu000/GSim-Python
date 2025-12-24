@@ -1,18 +1,23 @@
+import time
 import functools
 import logging
 import os
 import pickle
-import tempfile
+import multiprocessing
+from filelock import FileLock
 from abc import ABC, abstractmethod
 from collections.abc import Sized
-from typing import Any, Callable, Generic, TypeVar, Union
+from typing import Any, Callable, Generic, List, Tuple, TypeVar, Union
 
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import (DataLoader, Dataset, Subset, default_collate,
                               random_split)
+from torch.optim.lr_scheduler import _LRScheduler, LRScheduler
 from tqdm import tqdm
+
+from gsim.include.utils.statistics import mean_and_ci
 
 from .normalizers import Normalizer, DefaultNormalizer
 
@@ -78,33 +83,6 @@ Notes:
 gsim_logger = logging.getLogger("gsim")
 
 
-class LossLandscapeConfig():
-
-    def __init__(self,
-                 epoch_inds=[],
-                 neg_gradient_step_scales=[],
-                 max_num_directions=None):
-        """
-        Args:
-
-            `epoch_inds`: for each epoch index in this list, a figure with the
-            loss landscape is produced. 
-
-            `neg_gradient_step_scales`: for each item i in this iterable, the
-            loss function is plotted at w - i*\nabla, where w is the vector of
-            weights and \nabla the gradient estimate obtained from one of the
-            batches. 
-
-            `max_num_directions`: if not None, then the loss landscape is
-            plotted for the first `max_num_directions` directions, which correspond
-            to the first `max_num_directions` batches.
-          
-        """
-        self.epoch_inds = epoch_inds
-        self.neg_gradient_step_scales = neg_gradient_step_scales
-        self.max_num_directions = max_num_directions
-
-
 class Diagnoser(ABC):
     """Abstract base class for neural network diagnosers.
     
@@ -145,6 +123,35 @@ class Diagnoser(ABC):
         Args: same as in check_forward.
         """
         pass
+
+
+class TrainingHistory():
+
+    def __init__(self):
+        # The length of these lists equals the number of steps.
+        self.l_train_loss_per_step = []  # Average loss for each batch
+        self.l_batch_length_per_step = []  # Needed to compute averages
+        self.l_lr = []
+
+        # List of indices where a training session started/resumed
+        self.l_step_inds_started_training = []
+
+        # List of indices where a checkpoint was saved. The current weight file
+        # corresponds to the last index in this list.
+        self.l_step_inds_checkpoints = []
+
+        # The following are lists of (ind_step, value)
+        self.l_train_loss_me = []
+        self.l_train_loss = []
+        self.l_val_loss = []
+        self.l_unnormalized_train_loss = []
+        self.l_unnormalized_val_loss = []
+
+    @property
+    def ind_first_step_current_session(self):
+        if len(self.l_step_inds_started_training) == 0:
+            return 0
+        return self.l_step_inds_started_training[-1]
 
 
 class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
@@ -205,14 +212,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         self.num_workers = num_workers
         gsim_logger.info(f"Using {self.device_type} device")
         if nn_folder is None:
+            gsim_logger.warning("* " * 50)
             gsim_logger.warning(
-                "* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *"
+                "*   WARNING: No folder has been specified. The weights of the network will not be saved when training."
             )
-            gsim_logger.warning(
-                "*   WARNING: The weights of the network are not being saved.")
-            gsim_logger.warning(
-                "* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *"
-            )
+            gsim_logger.warning("* " * 50)
         self.nn_folder = nn_folder
 
         # Set the normalizer to None or to an instance of Normalizer
@@ -240,16 +244,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             # Create the folder if it does not exist
             os.makedirs(self.nn_folder, exist_ok=True)
 
+            if self.normalizer is not None:
+                normalizer = self.normalizer
+                normalizer.load_if_file_exists()
+
             if os.path.exists(self.weight_file_path):
                 self.load_weights_from_path(self.weight_file_path)
                 gsim_logger.info(
                     f"Weights loaded from {self.weight_file_path}")
-                if self.normalizer is not None:
-                    normalizer = self.normalizer
-                    normalizer.load_if_file_exists()
             else:
                 gsim_logger.warning(
-                    f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network will be initialized."
+                    f"Warning: {os.path.abspath(self.weight_file_path)} does not exist. The network weights will be initialized."
                 )
 
         self.to(
@@ -382,56 +387,114 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 0] and loss.ndim == 1, "f_loss must return a vector of length batch_size."
         return loss
 
-    def _run_epoch(self, dataloader, f_loss: LossFunType, optimizer=None):
+    def _run_training_step(self,
+                           batch,
+                           f_loss: LossFunType,
+                           optimizer,
+                           lr_scheduler=None,
+                           max_grad_norm=None):
         """
         Args:
 
-            `optimizer`: if None, the weights are not updated. This is useful to
-            evaluate the loss. 
+            `optimizer` 
 
             `f_loss`: LossFunType
+
+            `lr_scheduler`: if provided, its step() method is invoked after
+            the optimizer step.
+
+            `max_grad_norm`: if provided, gradients are clipped to have maximum
+            norm `max_grad_norm` during training.
+
+        Returns:
+            The vector of losses for the batch.
+        
+        """
+
+        # Forward pass
+        v_loss = self._get_loss(batch, f_loss)  # vector of length batch_size
+        if self._diagnoser is not None:
+            self._diagnoser.check_forward(self, v_loss, batch, f_loss)
+
+        # Backward pass
+        self.zero_grad()
+        torch.mean(v_loss).backward()
+        if self._diagnoser is not None:
+            self._diagnoser.check_backward(self, v_loss, batch, f_loss)
+
+        if max_grad_norm is not None:
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_grad_norm)
+
+        # Weight update
+        optimizer.step()
+        if lr_scheduler:
+            lr_scheduler.step()
+
+        return v_loss.detach().cpu().numpy()
+
+    def _eval_static_metric(
+        self,
+        dataloader,
+        f_loss: LossFunType,
+        max_hci=None,
+        alpha: float = 0.05,
+    ):
+        """
+        Averages f_loss across the dataset.
+
+        Args: 
+
+            `f_loss`: LossFunType
+
+            `max_hci`: if not None, the computation stops when the half-width of
+            the confidence interval (CI) is below this threshold. 
+
+            `alpha`: significance level for the CI (e.g. 0.05 for 95% CI)
+
+        Returns:
+            `metric`: the estimated value of the metric.
+
+            `hci`: half-width of the confidence interval (CI) for the metric.
         
         """
 
         l_loss_this_epoch = []
-        iterator = tqdm(dataloader) if optimizer else dataloader
-        for data in iterator:
+        for ind_data, data in enumerate(dataloader):
 
-            if optimizer:
+            with torch.no_grad():
                 # Forward pass
                 loss = self._get_loss(data,
                                       f_loss)  # vector of length batch_size
-                if self._diagnoser is not None:
-                    self._diagnoser.check_forward(self, loss, data, f_loss)
 
-                # Backward pass
-                self.zero_grad()
-                torch.mean(loss).backward()
-                if self._diagnoser is not None:
-                    self._diagnoser.check_backward(self, loss, data, f_loss)
+            l_loss_this_epoch += loss.detach().cpu().numpy().tolist()
 
-                # Weight update
-                optimizer.step()
-                optimizer.zero_grad(
-                )  # This line can probably be removed given that we clear the gradients before backward pass
-            else:
-                with torch.no_grad():
-                    # Forward pass
-                    loss = self._get_loss(
-                        data, f_loss)  # vector of length batch_size
-                    if self._diagnoser is not None:
-                        self._diagnoser.check_forward(self, loss, data, f_loss)
+            # Stop if enough examples have been processed
+            if max_hci is not None and len(l_loss_this_epoch) >= 2:
+                mean, hci = mean_and_ci(l_loss_this_epoch, alpha=alpha)
+                if hci <= max_hci:
+                    gsim_logger.info(
+                        f"    Target accuracy reached during metric evaluation after {ind_data+1} out of {len(dataloader)} batches (used {len(l_loss_this_epoch)} examples)."
+                    )
+                    return mean, hci
 
-            l_loss_this_epoch.append(loss.detach())
-
-        return float(torch.cat(l_loss_this_epoch).mean().cpu().numpy()) if len(
-            l_loss_this_epoch) else np.nan
+        if len(l_loss_this_epoch) == 0:
+            return np.nan, np.nan
+        elif len(l_loss_this_epoch) == 1:
+            return l_loss_this_epoch[0], np.nan
+        else:
+            mean, hci = mean_and_ci(l_loss_this_epoch, alpha=alpha)
+            if max_hci is not None:
+                gsim_logger.info(
+                    f"    Target accuracy not reached during metric evaluation (used all {len(dataloader)} batches, {len(l_loss_this_epoch)} examples)."
+                )
+            return mean, hci
 
     def evaluate(self,
                  dataset,
                  batch_size,
                  f_loss: LossFunType,
-                 unnormalized=True):
+                 unnormalized=True,
+                 max_hci=None):
         """
         Args:
 
@@ -441,6 +504,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         Returns a dict with key-values:
 
         "loss": the result of averaging `f_loss` across `dataset`.
+
+        "hci": half-width of the confidence interval (CI) for the loss.
         """
         self._assert_initialized()
 
@@ -453,8 +518,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         dataloader = self.make_data_loader(dataset, batch_size)
         self.eval()
-        loss = self._run_epoch(dataloader, f_loss=f_loss)
-        return {"loss": loss}
+        loss, hci = self._eval_static_metric(dataloader,
+                                             f_loss=f_loss,
+                                             max_hci=max_hci)
+        return {"loss": loss, "hci": hci}
 
     class NeuralNetDataset(Dataset):
 
@@ -589,18 +656,25 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         assert self.nn_folder is not None
         return self.get_weight_file_path(self.nn_folder)
 
-    @property
-    def hist_path(self):
-        assert self.nn_folder is not None
-        return os.path.join(self.nn_folder, "hist.pk")
+    @staticmethod
+    def make_hist_path(nn_folder):
+        assert nn_folder is not None
+        return os.path.join(nn_folder, "hist.pk")
 
     @staticmethod
     def get_weight_file_path(folder):
         return os.path.join(folder, "weights.pth")
 
     @staticmethod
+    def get_best_val_weight_file_path(folder):
+        return os.path.join(folder, "weights-best_val.pth")
+
+    @staticmethod
     def get_optimizer_state_file_path(folder):
         return os.path.join(folder, "optimizer.pth")
+
+    def get_lr_scheduler_state_file_path(self, folder):
+        return os.path.join(folder, "lr_scheduler.pth")
 
     def load_weights_from_path(self, path):
         checkpoint = torch.load(path,
@@ -613,7 +687,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         #load_optimizer_state(initial_optimizer_state_file)
 
     def save_weights_to_path(self, path):
-        gsim_logger.info(f"Saving weights to {path}")
+        gsim_logger.info(f"   💾 Saving weights to {path}")
         torch.save({"weights": self.state_dict()}, path)
 
     def make_data_loader(self,
@@ -644,25 +718,61 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                               self.collate_and_normalize,
                               no_targets=no_targets))
 
+    def save_hist(self, d_hist):
+        if self.nn_folder is not None:
+            os.makedirs(self.nn_folder, exist_ok=True)
+            lock = FileLock(self.make_hist_path(self.nn_folder) + ".lock")
+            # Prevent read/write conflicts, which can occur when we plot the
+            # training history dynamically.
+            with lock:
+                with open(self.make_hist_path(self.nn_folder), "wb") as f:
+                    pickle.dump(d_hist, f)
+
+    def load_hist(self) -> TrainingHistory:
+        return self.load_hist_from_folder(self.nn_folder)
+
+    @staticmethod
+    def load_hist_from_folder(nn_folder) -> TrainingHistory:
+        if nn_folder is not None and os.path.exists(
+                NeuralNet.make_hist_path(nn_folder)):
+            lock = FileLock(NeuralNet.make_hist_path(nn_folder) + ".lock")
+            with lock:
+                with open(NeuralNet.make_hist_path(nn_folder), "rb") as f:
+                    hist = pickle.load(f)
+            assert isinstance(
+                hist, TrainingHistory
+            ), "The training history file has an old format. Please delete it and try again."
+
+        else:
+            hist = TrainingHistory()
+        return hist
+
     def fit(self,
             dataset: Dataset,
-            optimizer,
-            num_epochs,
             f_loss: Callable,
+            optimizer,
+            lr_scheduler: _LRScheduler | LRScheduler | None = None,
+            num_epochs=None,
+            num_steps=None,
             dataset_val=None,
+            val_split=0.0,
             batch_size=32,
             batch_size_eval=None,
             shuffle=True,
-            val_split=0.0,
-            best_weights=True,
-            patience=None,
-            lr_patience=None,
-            lr_decay=.8,
-            restart_optimizer_when_reducing_lr=False,
-            eval_unnormalized_loss=False,
-            fit_normalizer=None,
+            num_patience_evals=None,
+            num_steps_eval_static: int | None = None,
+            num_steps_eval_moving: int | None = None,
+            num_steps_checkpoint: int | None = None,
+            checkpoint_criterion: str | None = None,
+            restore_best_checkpoint=None,
+            keep_best_val_weights=False,
+            static_max_hci=None,
+            eval_unnormalized_losses=False,
+            unnormalized_max_hci=None,
             obtain_static_training_loss=False,
-            llc=LossLandscapeConfig()):
+            max_grad_norm: float | None = None,
+            live_plot=False,
+            live_plot_interval=1000) -> TrainingHistory:
         """ 
         Starts a training session.
 
@@ -682,176 +792,429 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
               normalizer.pk.
         
             - If you change the dataset, erase/rename the hist.pk file. This is
-              because the losses change. If you do not do this, the weights will
-              not be saved until the values of the new (typ. validation) loss
-              are lower than the values of the old (validation) loss.
+              because the losses change. If you do not do this, a checkpoint
+              will not be saved until the values of the new (e.g. validation)
+              loss are lower than the values of the old (validation) loss.
 
         Args:
+            `dataset` (Dataset): The training dataset.
 
-          `f_loss`: f_loss(output_batch,target_batch) 
+            `f_loss` (Callable): The loss function f_loss(output_batch,
+            target_batch). It should return a vector of shape (batch_size,).
 
-          `batch_size_eval` is the batch size used to evaluate the loss. If
-          None, `batch_size` is used also for evaluation.
+            `optimizer`: The optimizer to use.
 
-          `llc`: instance of LossLandscapeConfig.
-        
-          At most one of `val_split` and `dataset_val` can be provided. If one
-          is provided, we say that `val` is True. 
+            `lr_scheduler` (_LRScheduler | LRScheduler | None): The learning
+            rate scheduler.
 
-          `patience`: if provided and the validation loss does not improve its
-          minimum in this session for `patience` epochs, training will be
-          stopped.
+            `num_epochs` (int | None): Number of additional epochs to train.
+            Exactly one of `num_epochs` and `num_steps` must be provided.
 
-          `restart_optimizer_when_reducing_lr`: if True, the state of the
-          optimizer is reset to its state at the beginning of the session (the
-          one in self.nn_folder/optimizer.pth if this file exists and can be
-          loaded, or the state of a new optimizer otherwise) every time the
-          learning rate is reduced. This may help escape local minima.
+            `num_steps` (int | None): Number of additional steps (backward
+            passes) to perform. Exactly one of `num_epochs` and `num_steps` must
+            be provided.
 
-          `fit_normalizer`: deprecated. Delete/renam the file normalizer.pk if
-          you want to fit the normalizer again.
+            `dataset_val` (Dataset | None): The validation dataset. At most one
+            of `val_split` and `dataset_val` can be provided.
 
-          `obtain_static_training_loss`: if True, the training loss is computed
-          for fixed network weights at the end of each epoch. Otherwise, only
-          the moving estimate of the training loss is computed. The moving
-          estimate is obtained by averaging the training loss after each batch
-          update. Thus, it is an average of loss values obtained for different
-          network weights. 
+            `val_split` (float): Fraction of the training data to use for
+            validation. Default is 0.0.
 
-        Returns a dict with keys and values given by:
-         
-          'train_loss_me': list of length num_epochs with the values of the
-          moving estimate of the training loss at each epoch. The moving
-          estimate is obtained by averaging the training loss after each batch
-          update. Thus, it is an average of loss values obtained for different
-          network weights.
+            `batch_size` (int): Batch size for training. The default is 32.
 
-          'train_loss': list of length num_epochs with the values of the
-          training loss computed at the end of each epoch.
+            `batch_size_eval` (int | None): Batch size used for evaluating
+            metrics/losses. If None, `batch_size` is used.
 
-          'val_loss': same as before but for the validation loss. Only if `val`
-          is true. 
+            `shuffle` (bool): Whether to shuffle the training data. Default is
+            True.                        
 
-          'lr': list of length num_epochs with the learning rate at each epoch.
+            `num_patience_evals` (int | None): If provided and the validation
+            loss does not improve its minimum in this session for
+            `num_patience_evals` evaluations, training will be stopped.
 
-          'l_loss_landscapes': list of figures with loss landscapes.
-                      
-           'unnormalized_train_loss': list of length num_epochs with the values
-           of the training loss computed at the end of each epoch after
-           unnormalizing the targets and the outputs. These values are only
-           computed if `eval_unnormalized_loss` is True; else they are np.nan.
+            `num_steps_eval_static` (int | None): Number of steps between static
+            metric evaluations. A static metric evaluation means that the
+            network weights are the same across batches, i.e., there is no
+            gradient noise. 
 
-           'unnormalized_val_loss': list of length num_epochs with the values of
-           the validation loss computed at the end of each epoch after
-           unnormalizing the targets and the outputs. Only if `val` is True.
-           These values are only computed if `eval_unnormalized_loss` is True;
-           else they are np.nan.
+            `num_steps_eval_moving` (int | None): Number of steps between moving
+            metric evaluations. A moving metric evaluation means that the
+            network weights are updated between batches, i.e., there is gradient
+            noise.
 
-         These losses are just informative, the network is trained on the
-         normalized loss if a normalizer that normalizes the targets is
-         specified in the constructor. 
+            `num_steps_checkpoint` (int | None): Number of steps between
+            checkpoints.
 
-        If `best_weights` is False, then the weights of the network at the end
-        of the execution of this function equal the weights at the last epoch.
-        Otherwise: 
-         
-          - if `val` is True, then the weights of the epoch with the
-        best validation loss are returned; 
-        
-          - if `val` is False, then the weights of the epoch with the
-        best training loss are returned; 
+            `checkpoint_criterion` (str | None): Criterion for saving
+            checkpoints. Can be:
 
+                - "val_loss": A checkpoint is saved only if the validation loss
+                  has improved (i.e., is lower) compared to the validation loss
+                  at the previous checkpoint. This is the default if validation
+                  data is provided.
+                - "train_loss_me": A checkpoint is saved only if the moving
+                  estimate of the training loss has improved. This is the
+                  default if no validation data is provided.
+                - "always": A checkpoint is always saved at every checkpoint
+                  interval (num_steps_checkpoint), regardless of whether the
+                  loss has improved.
+                - "never": Checkpoints are never saved during training.
+
+            `restore_best_checkpoint` (bool | None): Whether to restore the best
+            checkpoint at the end of training. If None, it defaults to True if
+            `self.nn_folder` is not None.
+
+            `keep_best_val_weights` (bool): In addition to checkpointing, one
+            can save the weights that achieve the best validation loss in
+            `self.nn_folder/weights-best_val.pth` by using this option. Every
+            time the validation loss is evaluated and it improves, the weights
+            are saved to this file, but not the optimizer and lr_scheduler
+            states, so it is not a checkpoint. This option is ignored if no
+            validation data is provided or if `self.nn_folder` is None.
+
+            `static_max_hci` (float | None): Maximum half-width of the
+            confidence interval for static metric evaluations. If the half-width
+            is below this threshold, the metric evaluation stops early, which
+            saves computation time.
+
+            `eval_unnormalized_losses` (bool): Whether to evaluate unnormalized
+            losses. Default is False.
+
+            `unnormalized_max_hci` (float | None): Maximum half-width of the
+            confidence interval for unnormalized loss evaluations.
+
+            `obtain_static_training_loss` (bool): If True, the training loss is
+            computed for fixed network weights at the end of each epoch (or
+            static eval interval). Otherwise, only the moving estimate of the
+            training loss is computed.
+
+            `max_grad_norm` (float | None): If provided, gradients are clipped
+            to have maximum norm `max_grad_norm` during training.
+
+            `live_plot` (bool): If True, a live plot of the training history is
+            shown during training.
+
+            `live_plot_interval` (int): Number of ms between updates of the
+            live plot.
+
+        Returns:
+            TrainingHistory: An object containing the training history.
         """
 
-        def get_landscape_plot(dataloader_train, dataloader_train_eval):
-            """
-            Returns:
+        def make_validation_data(dataset: Dataset, dataset_val, val_split):
+            assert val_split == 0.0 or dataset_val is None
+            if dataset_val is None:
+                # The data is deterministically split into training and validation
+                # sets so that we can resume training.
+                assert isinstance(dataset, Sized)
+                num_examples_val = int(val_split * len(dataset))
+                dataset_train = Subset(dataset,
+                                       range(len(dataset) - num_examples_val))
+                dataset_val = Subset(
+                    dataset,
+                    range(len(dataset) - num_examples_val, len(dataset)))
+            else:
+                dataset_train = dataset
+                num_examples_val = len(dataset_val)
+            return dataset_train, dataset_val
 
-                GFigure with a figure in which the loss is plotted vs. the
-                distance traveled along negative gradient estimates. There is
-                one curve for each batch, since each one provides a gradient. 
+        def check_checkpoint_args(checkpoint_criterion, val,
+                                  num_steps_checkpoint, num_steps_eval_static,
+                                  num_steps_eval_moving):
+            if checkpoint_criterion == "val_loss":
+                assert val, "Validation data must be provided to use val_loss as checkpoint criterion."
+                assert num_steps_checkpoint >= num_steps_eval_static, \
+                    "num_steps_checkpoint must be at least num_steps_eval_static when using val_loss as checkpoint criterion."
+                if num_steps_checkpoint % num_steps_eval_static != 0:
+                    gsim_logger.warning(
+                        "It is recommended that num_steps_checkpoint be a multiple of num_steps_eval_static when using val_loss as checkpoint criterion. Otherwise, the reference validation loss may be stale."
+                    )
+            elif checkpoint_criterion == "train_loss_me":
+                assert num_steps_checkpoint >= num_steps_eval_moving, \
+                    "num_steps_checkpoint must be at least num_steps_eval_moving when using train_loss_me as checkpoint criterion."
+                if num_steps_checkpoint % num_steps_eval_moving != 0:
+                    gsim_logger.warning(
+                        "It is recommended that num_steps_checkpoint be a multiple of num_steps_eval_moving when using train_loss_me as checkpoint criterion. Otherwise, the reference training loss may be stale."
+                    )
+
+        def fit_normalizer_if_needed():
+            assert self.normalizer is not None
+            if not self.normalizer.are_parameters_set:
+                gsim_logger.info("Fitting the normalizer...")
+                self.normalizer.fit(dataset_train)
+                self.normalizer.save()
+            else:
+                gsim_logger.info(
+                    "The normalizer will not be fitted since its parameters have been loaded. "
+                    " If you want to fit it again, delete/rename normalizer.pk."
+                )
+
+        def make_training_loss_history(hist: TrainingHistory):
+            """
+            Returns the subset of training loss values and batch lengths
+            included in the history of this session, that is, the segments
+            corresponding to restored checkpoints. In other words, these would
+            be the values if there had been no interruptions in training.
+            """
+            l_intervals = self.get_session_history_steps(hist)
+
+            def get_points_in_intervals(l_in):
+                l_out = []
+                for (step_start, step_end) in l_intervals:
+                    for (ind_step, loss) in enumerate(l_in):
+                        if step_start <= ind_step < step_end:
+                            l_out += [loss]
+                return l_out
+
+            l_train_loss_per_step = get_points_in_intervals(
+                hist.l_train_loss_per_step)
+            l_batch_length_per_step = get_points_in_intervals(
+                hist.l_batch_length_per_step)
+            return l_train_loss_per_step, l_batch_length_per_step
+
+        def get_log_loss_str(l_loss, hci=None):
+            l_vals = [t[1] for t in l_loss]
+            str_val = f"{l_vals[-1]:.4f}"
+            if hci is not None:
+                str_val += f" ± {hci:.4f}"
+            if l_vals[-1] == min(l_vals):
+                return f"{str_val} (best ⭐)"
+            else:
+                return f"{str_val} (best {min(l_vals):.4f})"
+
+        def get_log_step_str(ind_step):
+            if ind_step % num_steps_per_epoch == 0:
+                str_epoch = f"{ind_step // num_steps_per_epoch}"
+            else:
+                str_epoch = f"{ind_step / num_steps_per_epoch:.2f}"
+            return f"Step {ind_step} (epoch {str_epoch})"
+
+        def eval_examples_per_second(hist: TrainingHistory):
+            step_ind_start = hist.ind_first_step_current_session
+            examples_this_session = sum(
+                hist.l_batch_length_per_step[step_ind_start:])
+            return examples_this_session / total_time_training
+
+        def eval_moving_metrics(ind_step, hist: TrainingHistory):
+            """
+            Moving metrics are obtained by averaging across the dataset, but the
+            values of the parameters differ across batches. Thus, there is
+            stochastic gradient noise.
+            """
+
+            # A moving estimate of the training loss needs to be stored because
+            # we may need to store a checkpoint based on it. However, we can
+            # extend the functionality of this function to compute other moving
+            # metrics if needed (e.g. an exponential moving average).
+            #
+            # In the past, we only considered the training loss since the
+            # beginning of the current training session. However, previous
+            # values from other restored sessions need to be considered as well.
+            # Else, the moving estimates may be too optimistic for a few steps
+            # right after starting a session. As a result, checkpoints may not
+            # be saved afterwards.
+            #
+            assert len(hist.l_train_loss_per_step) == ind_step + 1, \
+                "l_step_inds_started_training has not been computed for this step."
+
+            # Reconstruct the training loss per step for this session plus the
+            # historic values.
+            l_train_loss_per_step = l_train_loss_per_step_hist + hist.l_train_loss_per_step[
+                hist.ind_first_step_current_session:]
+            l_batch_length_per_step = l_batch_length_per_step_hist + hist.l_batch_length_per_step[
+                hist.ind_first_step_current_session:]
+
+            # We go at most num_steps_per_epoch steps back to compute the
+            # moving estimate of the training loss.
+            first_step_ind = max(
+                0,
+                len(l_train_loss_per_step) - num_steps_per_epoch)
+            train_loss_me = np.average(
+                l_train_loss_per_step[first_step_ind:],
+                weights=l_batch_length_per_step[first_step_ind:])
+            hist.l_train_loss_me += [(ind_step, train_loss_me)]
+            gsim_logger.info(
+                f"{get_log_step_str(ind_step)}: "
+                f"training loss me = {get_log_loss_str(hist.l_train_loss_me)}, "
+                f"lr = {hist.l_lr[-1]:.2g}, "
+                f"{int(eval_examples_per_second(hist))} examples/s")
+
+        def eval_static_metrics(ind_step, hist: TrainingHistory,
+                                dataloader_train_eval, dataloader_val):
+            """
+            
+            Static metrics are obtained by averaging a function across the
+            dataset, but the values of the network weights are the same for all
+            batches.
             
             """
 
-            self.save_weights_to_path(llp_weight_file)
-            self.train()
-            ll_loss = [
-            ]  # One list per considered batch. Each inner list contains the loss for each distance.
-            for input_batch, targets_batch in dataloader_train:
+            def save_weights_if_best_val(hist: TrainingHistory):
+                """
+                If the validation loss is the best so far, save the weights to
+                a separate file.                
+                """
+                if self.nn_folder is None:
+                    return
+                l_intervals = self.get_session_history_steps(
+                    hist, include_current_session=True)
+                # Get the validation loss values for this session plus the historic ones.
+                l_val_loss = []
+                for (ind_step, val_loss) in hist.l_val_loss:
+                    for (step_start, step_end) in l_intervals:
+                        if step_start <= ind_step < step_end:
+                            l_val_loss += [val_loss]
+                            continue
+                if len(l_val_loss) == 0:
+                    return
+                if l_val_loss[-1] == min(l_val_loss):
+                    path_best_val_weights = self.get_best_val_weight_file_path(
+                        self.nn_folder)
+                    gsim_logger.info(f"│ 🎉 val_loss reached a minimum.")
+                    self.save_weights_to_path(path_best_val_weights)
 
-                # 1. Compute the gradient
-                input_batch = input_batch.float().to(
-                    self.device_type, non_blocking=self.device_type != "mps"
-                )  # bug https://github.com/pytorch/pytorch/issues/139550
-                targets_batch = targets_batch.float().to(
-                    self.device_type, non_blocking=self.device_type != "mps"
-                )  # bug https://github.com/pytorch/pytorch/issues/139550
+            gsim_logger.info(f"┌{'─' * 100}┐")
+            gsim_logger.info(
+                f"│ Evaluating static metrics at {get_log_step_str(ind_step)}")
 
-                output_batch = self(input_batch.float())
-                loss = f_loss(output_batch.float(), targets_batch.float())
-                torch.mean(loss).backward()
+            l_str_log = []
+            self.eval()
+            if obtain_static_training_loss:
+                gsim_logger.info(
+                    "│ Computing the static estimate of the training loss...")
+                m, hci = self._eval_static_metric(dataloader_train_eval,
+                                                  f_loss,
+                                                  max_hci=static_max_hci)
+                hist.l_train_loss += [(ind_step, m)]
+                l_str_log.append("train loss = " +
+                                 get_log_loss_str(hist.l_train_loss, hci))
+            if dataloader_val:
+                gsim_logger.info("│ Computing the validation loss...")
+                m, hci = self._eval_static_metric(dataloader_val,
+                                                  f_loss,
+                                                  max_hci=static_max_hci)
+                hist.l_val_loss += [(ind_step, m)]
+                l_str_log.append("val loss = " +
+                                 get_log_loss_str(hist.l_val_loss, hci))
+                if keep_best_val_weights:
+                    save_weights_if_best_val(hist)
+            if eval_unnormalized_losses and self.normalizer is not None:
+                gsim_logger.info(
+                    "│ Computing the static estimate of the unnormalized training loss..."
+                )
+                m, hci = self._eval_static_metric(
+                    dataloader_train_eval,
+                    self.make_unnormalized_loss(f_loss),
+                    max_hci=unnormalized_max_hci)
+                hist.l_unnormalized_train_loss += [(ind_step, m)]
+                l_str_log.append(
+                    "unnormalized train loss = " +
+                    get_log_loss_str(hist.l_unnormalized_train_loss, hci))
+            if eval_unnormalized_losses and self.normalizer is not None and val:
+                gsim_logger.info(
+                    "│ Computing the static estimate of the unnormalized validation loss..."
+                )
+                m, hci = self._eval_static_metric(
+                    dataloader_val,
+                    self.make_unnormalized_loss(f_loss),
+                    max_hci=unnormalized_max_hci)
+                hist.l_unnormalized_val_loss += [(ind_step, m)]
+                l_str_log.append(
+                    "unnormalized val loss = " +
+                    get_log_loss_str(hist.l_unnormalized_val_loss, hci))
+            gsim_logger.info(f"│ ")
+            gsim_logger.info(f"│ Results: ")
+            for s in l_str_log:
+                gsim_logger.info(f"│ {s}")
+            gsim_logger.info(f"└{'─' * 100}┘")
 
-                # 2. Compute the loss for gradient displacement
-                l_loss = []
-                for scale in llc.neg_gradient_step_scales:
-                    for param in self.parameters():
-                        param.data -= scale * param.grad
+        def save_checkpoint_if_needed(ind_step, hist: TrainingHistory):
 
-                    with torch.no_grad():  # Disable gradient computation
-                        output_batch = self(input_batch.float())[:, 0]
-                        self.train()
-                        loss = self._run_epoch(dataloader_train_eval, f_loss)
-                    l_loss.append(loss)
+            def has_metric_improved_since_prev_checkpoint(l_metric):
+                current_criterion_value = l_metric[-1][1]
+                # Now let us find the most recent value of the criterion metric
+                # at the time of the last checkpoint.
+                if len(hist.l_step_inds_checkpoints) == 0:
+                    prev_checkpoint_criterion_value = float('inf')
+                else:
+                    ind_last_checkpoint = hist.l_step_inds_checkpoints[-1]
+                    criterion_values_until_last_checkpoint = [
+                        v for (s, v) in l_metric if s <= ind_last_checkpoint
+                    ]
+                    # If there are no such values, set prev_checkpoint_criterion_value
+                    # to infinity so that we save a checkpoint.
+                    prev_checkpoint_criterion_value = criterion_values_until_last_checkpoint[
+                        -1] if len(criterion_values_until_last_checkpoint
+                                   ) > 0 else float('inf')
+                return current_criterion_value < prev_checkpoint_criterion_value
 
-                    # Restore the weights (can alt. be combined with next iteration)
-                    for param in self.parameters():
-                        param.data += scale * param.grad
-
-                self.zero_grad()
-
-                ll_loss.append(l_loss)
-                if llc.max_num_directions is not None and len(
-                        ll_loss) >= llc.max_num_directions:
-                    break
-
-            self.load_weights_from_path(llp_weight_file)
-            return GFigure(xaxis=llc.neg_gradient_step_scales,
-                           yaxis=np.array(ll_loss),
-                           xlabel="Step size along the negative gradient",
-                           ylabel="Loss",
-                           title=f"Loss landscape for epoch {ind_epoch}")
-
-        def get_temp_file_path():
-            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-                temp_file_path = temp_file.name
-            return temp_file_path
-
-        def get_temp_folder_path():
-            """Returns a temporary folder path."""
-            return tempfile.mkdtemp()
-
-        def get_train_val_state_folder_paths():
-            """
-            Returns the folders where the weights and optimizer state need to be
-            stored at the epochs with the best training loss and best validation
-            loss.
-
-                best_train_loss_folder, best_val_loss_folder
-            
-            """
+            if ind_step in hist.l_step_inds_checkpoints:
+                return  # Checkpoint already saved at this step.
 
             if self.nn_folder is None:
-                best_train_loss_folder = get_temp_folder_path()
-                best_val_loss_folder = get_temp_folder_path()
+                return
+
+            if checkpoint_criterion == "val_loss":
+                assert val, "Validation data must be provided to use val_loss as checkpoint criterion."
+                assert len(hist.l_val_loss) > 0, \
+                    "Validation loss has not been evaluated yet. This should not happen, as num_steps_checkpoint >= num_steps_eval_static."
+                is_value_fresh = hist.l_val_loss[-1][0] == ind_step
+                if not is_value_fresh:
+                    gsim_logger.warning(
+                        "The checkpoint criterion is `val_loss`, but the validation loss has not been evaluated at this step. Using the last available value. To avoid this issue, set num_steps_checkpoint to be a multiple of num_steps_eval_static."
+                    )
+                if has_metric_improved_since_prev_checkpoint(hist.l_val_loss):
+                    gsim_logger.info(
+                        f"Step {ind_step}: val_loss improved, saving checkpoint."
+                    )
+                    save_checkpoint()
+            elif checkpoint_criterion == "train_loss_me":
+                assert len(hist.l_train_loss_me) > 0, \
+                    "Training moving estimate loss has not been evaluated yet. This should not happen, as num_steps_checkpoint >= num_steps_eval_moving."
+                is_value_fresh = hist.l_train_loss_me[-1][0] == ind_step
+                if not is_value_fresh:
+                    gsim_logger.warning(
+                        "The checkpoint criterion is `train_loss_me`, but the training moving estimate loss has not been evaluated at this step. Using the last available value. To avoid this issue, set num_steps_checkpoint to be a multiple of num_steps_eval_moving."
+                    )
+                if has_metric_improved_since_prev_checkpoint(
+                        hist.l_train_loss_me):
+                    gsim_logger.info(
+                        f"Step {ind_step}: train_loss_me improved, saving checkpoint."
+                    )
+                    save_checkpoint()
+            elif checkpoint_criterion == "never":
+                pass
+            elif checkpoint_criterion == "always":
+                gsim_logger.info(
+                    f"Step {ind_step}: saving checkpoint (always).")
+                save_checkpoint()
             else:
-                os.makedirs(self.nn_folder, exist_ok=True)
-                if val:
-                    best_train_loss_folder = get_temp_folder_path()
-                    best_val_loss_folder = self.nn_folder
-                else:
-                    best_train_loss_folder = self.nn_folder
-                    best_val_loss_folder = get_temp_folder_path()
-            return best_train_loss_folder, best_val_loss_folder
+                raise ValueError(
+                    f"Invalid checkpoint_criterion: {checkpoint_criterion}")
+
+        def save_checkpoint():
+            if self.nn_folder is None:
+                return
+            self.save_weights_to_path(self.get_weight_file_path(
+                self.nn_folder))
+            save_optimizer_state(
+                self.get_optimizer_state_file_path(self.nn_folder))
+            if lr_scheduler is not None:
+                save_lr_scheduler_state(
+                    self.get_lr_scheduler_state_file_path(self.nn_folder))
+
+            hist.l_step_inds_checkpoints.append(ind_step)
+            self.save_hist(hist)
+
+        def load_checkpoint():
+            assert self.nn_folder is not None
+            self.load_weights_from_path(
+                self.get_weight_file_path(self.nn_folder))
+            load_optimizer_state(
+                self.get_optimizer_state_file_path(self.nn_folder))
+            if lr_scheduler is not None:
+                load_lr_scheduler_state(
+                    self.get_lr_scheduler_state_file_path(self.nn_folder))
 
         def save_optimizer_state(path):
             torch.save({"state": optimizer.state_dict()}, path)
@@ -864,129 +1227,80 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 optimizer.load_state_dict(checkpoint["state"])
             except Exception as e:
                 gsim_logger.warning(
-                    f"Optimizer state was not loaded from {path}. Using default initialization."
+                    f"No optimizer state file found at {path}. Using default initialization."
                 )
 
-        def decrease_lr(optimizer, lr_decay):
-            """Resets the optimizer state and decreases the learning rate by a factor of `lr_decay`."""
+        def save_lr_scheduler_state(path):
+            assert lr_scheduler is not None
+            torch.save({"state": lr_scheduler.state_dict()}, path)
 
-            # Store the lr values
-            l_lr = [
-                optimizer.param_groups[ind_group]["lr"]
-                for ind_group in range(len(optimizer.param_groups))
-            ]
-            if restart_optimizer_when_reducing_lr:
-                load_optimizer_state(initial_optimizer_state_file)
-            for ind_group in range(len(optimizer.param_groups)):
-                optimizer.param_groups[ind_group][
-                    "lr"] = l_lr[ind_group] * lr_decay
-
-        def save_hist(d_hist):
-            if self.nn_folder is not None:
-                os.makedirs(self.nn_folder, exist_ok=True)
-                pickle.dump(d_hist, open(self.hist_path, "wb"))
-
-        def load_hist():
-            if self.nn_folder is not None and os.path.exists(self.hist_path):
-                d_hist = pickle.load(open(self.hist_path, "rb"))
-
-                # Backwards compatibility: populate the unnormalized loss if needed
-                if "unnormalized_train_loss" not in d_hist:
-                    d_hist["unnormalized_train_loss"] = [np.nan] * len(
-                        d_hist["train_loss"])
-                if "unnormalized_val_loss" not in d_hist:
-                    d_hist["unnormalized_val_loss"] = [np.nan] * len(
-                        d_hist["val_loss"])
-
-            else:
-                d_hist = {
-                    'train_loss_me': [],
-                    'train_loss': [],
-                    'val_loss': [],
-                    "lr": [],
-                    "l_loss_landscapes": [],
-                    "unnormalized_train_loss": [],
-                    "unnormalized_val_loss": [],
-                }
-            return d_hist
-
-        def compute_unnormalized_losses(dataloader_train_eval, dataloader_val,
-                                        f_loss):
-
-            if self.normalizer is None or not eval_unnormalized_loss:
-                unnormalized_loss_train_this_epoch = np.nan
-                unnormalized_loss_val_this_epoch = np.nan
-            else:
-                self.train()
-                unnormalized_loss_train_this_epoch = self._run_epoch(
-                    dataloader_train_eval, self.make_unnormalized_loss(f_loss))
-
-                self.eval()
-                unnormalized_loss_val_this_epoch = self._run_epoch(
-                    dataloader_val, self.make_unnormalized_loss(
-                        f_loss)) if dataloader_val else np.nan
-
-            l_unnormalized_loss_train.append(
-                unnormalized_loss_train_this_epoch)
-            l_unnormalized_loss_val.append(unnormalized_loss_val_this_epoch)
-
-        def log_epoch_info(ind_epoch, num_epochs, ind_epoch_start,
-                           l_loss_train_me, l_loss_train, l_loss_val,
-                           optimizer):
-            str_log = (
-                f"Epoch {ind_epoch-ind_epoch_start}/{num_epochs}: " +
-                f"train loss me = {l_loss_train_me[-1]:.4f} (best {np.nanmin(l_loss_train_me):.4f}), "
-            )
-            if obtain_static_training_loss:
-                str_log += (
-                    f"train loss = {l_loss_train[-1]:.4f} (best {np.nanmin(l_loss_train):.4f}), "
+        def load_lr_scheduler_state(path):
+            assert lr_scheduler is not None
+            try:
+                checkpoint = torch.load(path,
+                                        weights_only=True,
+                                        map_location=self.device_type)
+                lr_scheduler.load_state_dict(checkpoint["state"])
+            except Exception as e:
+                gsim_logger.warning(
+                    f"LR scheduler state was not found at {path}. Using default initialization."
                 )
-            str_log += f"val loss = {l_loss_val[-1]:.4f}(best {np.nanmin(l_loss_val):.4f}), "
-            if eval_unnormalized_loss:
-                str_log += (f"unnormalized train loss = "
-                            f"{l_unnormalized_loss_train[-1]:.4f}, ")
-                if val:
-                    str_log += (f"unnormalized val loss = "
-                                f"{l_unnormalized_loss_val[-1]:.4f}, ")
-            str_log += f"lr = {optimizer.param_groups[0]['lr']:.2e}"
-            gsim_logger.info(str_log)
 
+        def is_patience_exhausted(hist: TrainingHistory) -> bool:
+            if num_patience_evals is None:
+                return False
+            if not val:
+                l_ref_tvals = hist.l_train_loss if obtain_static_training_loss else hist.l_train_loss_me
+            else:
+                l_ref_tvals = hist.l_val_loss
+            l_vals = [t[1] for t in l_ref_tvals]
+            # If the global minimum of l_vals has not improved in the last
+            # num_patience_evals evaluations, return True.
+            if len(l_vals) < num_patience_evals + 1:
+                return False
+            return min(l_vals[-num_patience_evals:]) > min(l_vals)
+
+        # Preparations
         self._assert_initialized()
-        assert fit_normalizer is None, "Argument `fit_normalizer` is deprecated. Delete/rename the file normalizer.pk if you want to fit the normalizer again."
         torch.cuda.empty_cache()
 
-        batch_size_eval = batch_size_eval if batch_size_eval else batch_size
+        # Validation data
+        dataset_train, dataset_val = make_validation_data(
+            dataset, dataset_val, val_split)
+        val = dataset_val is not None and len(dataset_val) > 0
 
-        assert val_split == 0.0 or dataset_val is None
-        if dataset_val is None:
-            # The data is deterministically split into training and validation
-            # sets so that we can resume training.
-            assert isinstance(dataset, Sized)
-            num_examples_val = int(val_split * len(dataset))
-            dataset_train = Subset(dataset,
-                                   range(len(dataset) - num_examples_val))
-            dataset_val = Subset(
-                dataset, range(len(dataset) - num_examples_val, len(dataset)))
-        else:
-            dataset_train = dataset
-            num_examples_val = len(dataset_val)
-        val = num_examples_val > 0
-        if patience is not None and val is False:
-            gsim_logger.warning(
-                "patience is set but no validation data is provided. Ignoring patience."
-            )
-            patience = None
+        # Input processing
+        batch_size_eval = batch_size_eval if batch_size_eval else batch_size
+        num_steps_per_epoch = int(
+            np.ceil(len(dataset) /  # type: ignore
+                    batch_size))
+        assert (num_epochs is None) ^ (num_steps is None), \
+            "Exactly one of num_epochs and num_steps must be provided."
+        if num_steps is None:
+            assert num_epochs is not None
+            num_steps = num_epochs * num_steps_per_epoch
+        if restore_best_checkpoint is None:
+            restore_best_checkpoint = (self.nn_folder is not None)
+        if checkpoint_criterion is None:
+            checkpoint_criterion = "val_loss" if val else "train_loss_me"
+        if num_steps_eval_moving is None:
+            num_steps_eval_moving = num_steps_per_epoch
+        if num_steps_eval_static is None:
+            num_steps_eval_static = max(num_steps_eval_moving,
+                                        num_steps_per_epoch)
+        if num_steps_checkpoint is None:
+            if checkpoint_criterion == "val_loss":
+                num_steps_checkpoint = num_steps_eval_static
+            elif checkpoint_criterion == "train_loss_me":
+                num_steps_checkpoint = num_steps_eval_moving
+            else:
+                num_steps_checkpoint = num_steps_per_epoch
+        check_checkpoint_args(checkpoint_criterion, val, num_steps_checkpoint,
+                              num_steps_eval_static, num_steps_eval_moving)
 
         # Fit the normalizer
         if self.normalizer is not None:
-            if not self.normalizer.are_parameters_set:
-                gsim_logger.info("Fitting the normalizer...")
-                self.normalizer.fit(dataset_train)
-                self.normalizer.save()
-            else:
-                gsim_logger.info(
-                    "The normalizer will not be fitted since its parameters have been loaded."
-                )
+            fit_normalizer_if_needed()
 
         # Instantiate the data loaders
         dataloader_train = self.make_data_loader(dataset_train, batch_size,
@@ -996,147 +1310,124 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         dataloader_val = self.make_data_loader(dataset_val, batch_size,
                                                shuffle) if val else None
 
-        d_hist = load_hist()
-        l_loss_train_me = d_hist['train_loss_me']
-        l_loss_train = d_hist['train_loss']
-        l_loss_val = d_hist['val_loss']
-        l_lr = d_hist['lr']
-        l_llplots = d_hist['l_loss_landscapes']  # loss landscape plots
-        ind_epoch_start = len(l_loss_train_me)
-        l_unnormalized_loss_train = d_hist['unnormalized_train_loss']
-        l_unnormalized_loss_val = d_hist['unnormalized_val_loss']
-
-        llp_weight_file = get_temp_file_path(
-        )  # file to restore the weights when the loss landscape needs to be plotted
-
-        best_train_loss = torch.inf
-        #num_epochs_left_to_expire_patience = patience
-        num_epochs_left_to_expire_lr_patience = lr_patience if isinstance(
-            lr_patience, int) else 0
-        best_train_loss_state_folder, best_val_loss_state_folder = get_train_val_state_folder_paths(
-        )
+        # History initialization
+        hist = self.load_hist()
+        ind_step = len(hist.l_train_loss_per_step)
+        hist.l_step_inds_started_training += [ind_step]
+        total_time_training = 0.0
+        l_train_loss_per_step_hist, l_batch_length_per_step_hist = \
+            make_training_loss_history(hist)
 
         # Try to load the optimizer state if available in self.nn_folder
         if self.nn_folder is not None:
             load_optimizer_state(
                 self.get_optimizer_state_file_path(self.nn_folder))
+            if lr_scheduler is not None:
+                load_lr_scheduler_state(
+                    self.get_lr_scheduler_state_file_path(self.nn_folder))
 
-        if restart_optimizer_when_reducing_lr:
-            # Regardless of whether the optimizer state could not be loaded in
-            # the previous step, we save the initial optimizer state so that we
-            # can reset it later.
-            initial_optimizer_state_file = get_temp_file_path()
-            save_optimizer_state(initial_optimizer_state_file)
+        # Live plotting
+        lpprocess = None
+        if live_plot and self.nn_folder is not None:
+            lpprocess = NeuralNet.live_plot(self.nn_folder,
+                                            interval=live_plot_interval,
+                                            background=True)
 
-        for ind_epoch in range(ind_epoch_start, ind_epoch_start + num_epochs):
-            self.train()
-            loss_train_me_this_epoch = self._run_epoch(dataloader_train,
-                                                       f_loss, optimizer)
-            loss_train_this_epoch = self._run_epoch(
-                dataloader_train_eval,
-                f_loss) if obtain_static_training_loss else np.nan
-            self.eval()
-            loss_val_this_epoch = self._run_epoch(
-                dataloader_val, f_loss) if dataloader_val else np.nan
+        done = False
+        while not done:
+            for batch in dataloader_train:
 
-            compute_unnormalized_losses(dataloader_train_eval, dataloader_val,
-                                        f_loss)
+                # Training step
+                self.train()
+                time_start_step = time.perf_counter()
+                v_loss_train_this_step = self._run_training_step(
+                    batch, f_loss, optimizer, lr_scheduler, max_grad_norm)
+                total_time_training += time.perf_counter() - time_start_step
+                hist.l_train_loss_per_step += [v_loss_train_this_step.mean()]
+                hist.l_batch_length_per_step += [len(v_loss_train_this_step)]
+                hist.l_lr.append(optimizer.param_groups[0]["lr"])
 
-            # The following lists should always have the same length
-            l_loss_train_me.append(loss_train_me_this_epoch)
-            l_loss_train.append(loss_train_this_epoch)
-            l_loss_val.append(loss_val_this_epoch)
-            l_lr.append(optimizer.param_groups[0]["lr"])
+                # Moving-metric evaluation
+                if ind_step % num_steps_eval_moving == 0:
+                    eval_moving_metrics(ind_step, hist)
+                    self.save_hist(hist)
 
-            log_epoch_info(ind_epoch, num_epochs, ind_epoch_start,
-                           l_loss_train_me, l_loss_train, l_loss_val,
-                           optimizer)
+                # Static-metric evaluation
+                if ind_step % num_steps_eval_static == 0:
+                    eval_static_metrics(ind_step, hist, dataloader_train_eval,
+                                        dataloader_val)
+                    self.save_hist(hist)
 
-            ind_epoch_best_loss_val = np.argmin(
-                [v if not np.isnan(v) else np.inf for v in l_loss_val])
-            if val and ind_epoch_best_loss_val == ind_epoch:
-                # If you change the dataset, the losses change. So you need to
-                # erase the hist.pk file, else, the weights will not be saved
-                # until the values of the new validation loss are better than
-                # the values of the old validation loss.
-                gsim_logger.info(
-                    "⭐ NEW BEST validation loss | Saving checkpoint")
-                self.save_weights_to_path(
-                    self.get_weight_file_path(best_val_loss_state_folder))
-                save_optimizer_state(
-                    self.get_optimizer_state_file_path(
-                        best_val_loss_state_folder))
+                # Checkpointing
+                if ind_step > 0 and ind_step % num_steps_checkpoint == 0:
+                    save_checkpoint_if_needed(ind_step, hist)
 
-            if patience:
-                ind_epoch_best_loss_val_this_session = np.argmin([
-                    v if not np.isnan(v) else np.inf
-                    for v in l_loss_val[ind_epoch_start:]
-                ]) + ind_epoch_start
-
-                if ind_epoch_best_loss_val_this_session + patience < ind_epoch:
-                    gsim_logger.info("Patience expired.")
+                # Patience
+                if is_patience_exhausted(hist):
+                    gsim_logger.info("Patience exhausted. Stopping training.")
+                    done = True
                     break
 
-            if lr_patience or not val:
-                # The weights should be stored:
-                #   - when there is lr_patience
-                #
-                #   - when there is no validation: this is because the best
-                # training weights need to be returned at the end.
-                ref_train_loss = loss_train_this_epoch if obtain_static_training_loss else loss_train_me_this_epoch
-                if ref_train_loss < best_train_loss:
-                    best_train_loss = ref_train_loss
-                    self.save_weights_to_path(
-                        self.get_weight_file_path(
-                            best_train_loss_state_folder))
-                    save_optimizer_state(
-                        self.get_optimizer_state_file_path(
-                            best_train_loss_state_folder))
-                    num_epochs_left_to_expire_lr_patience = lr_patience if isinstance(
-                        lr_patience, int) else 0
-                else:
-                    if lr_patience:
-                        num_epochs_left_to_expire_lr_patience -= 1
-                        if num_epochs_left_to_expire_lr_patience == 0:
-                            self.load_weights_from_path(
-                                self.get_weight_file_path(
-                                    best_train_loss_state_folder))
-                            load_optimizer_state(
-                                self.get_optimizer_state_file_path(
-                                    best_train_loss_state_folder))
-                            decrease_lr(optimizer, lr_decay)
-                            num_epochs_left_to_expire_lr_patience = lr_patience
+                ind_step += 1
+                if ind_step >= hist.ind_first_step_current_session + num_steps:
+                    done = True
+                    break
 
-            # Loss landscapes
-            if ind_epoch - ind_epoch_start in llc.epoch_inds:
-                l_llplots.append(
-                    get_landscape_plot(dataloader_train,
-                                       dataloader_train_eval))
+        if restore_best_checkpoint and hist.l_step_inds_checkpoints:
+            load_checkpoint()
 
-            d_hist = {
-                'train_loss_me': l_loss_train_me,
-                'train_loss': l_loss_train,
-                'val_loss': l_loss_val,
-                "lr": l_lr,
-                "l_loss_landscapes": l_llplots,
-                "unnormalized_train_loss": l_unnormalized_loss_train,
-                "unnormalized_val_loss": l_unnormalized_loss_val,
-            }
-            save_hist(d_hist)
+        # Terminate the plotting process if running
+        if lpprocess is not None:
+            lpprocess.terminate()
+            lpprocess.join()
 
-        if best_weights and num_epochs > 0:
-            if val:
-                best_val_loss_weight_file = self.get_weight_file_path(
-                    best_val_loss_state_folder)
-                if os.path.exists(best_val_loss_weight_file):
-                    self.load_weights_from_path(best_val_loss_weight_file)
-            else:
-                best_train_loss_weight_file = self.get_weight_file_path(
-                    best_train_loss_state_folder)
-                if os.path.exists(best_train_loss_weight_file):
-                    self.load_weights_from_path(best_train_loss_weight_file)
+        return hist
 
-        return d_hist
+    @staticmethod
+    def live_plot(nn_folder: str,
+                  interval=1000,
+                  background: bool = False) -> multiprocessing.Process | None:
+        """
+        It starts a figure that is periodically refreshed to show the latest
+        training history stored in `nn_folder`.
+
+        Args:
+            `nn_folder`: folder where the neural network training history is
+            stored.
+            
+            `interval`: refresh interval in milliseconds.
+
+            `background`: If True, the live plot is started in a separate
+            process and a handle to this process is returned. 
+        """
+
+        def launch_in_background() -> 'multiprocessing.Process':
+            """
+            It starts a separate process that does the plotting.
+            """
+
+            # Start the live plotting in a separate process
+            plot_process = multiprocessing.Process(target=NeuralNet.live_plot,
+                                                   kwargs={
+                                                       "nn_folder": nn_folder,
+                                                       "interval": interval,
+                                                       "background": False
+                                                   })
+            plot_process.start()
+            return plot_process
+
+        if background:
+            return launch_in_background()
+
+        def make_figure():
+            hist = NeuralNet.load_hist_from_folder(nn_folder)
+            return NeuralNet.plot_training_history(hist)[0]
+
+        G = GFigure.make_periodically_refreshing_figure(
+            f_make_figure=make_figure, interval=interval)
+        if G is not None:
+            G.plot()
+            G.show()
 
     def set_diagnoser(self, diagnoser: Diagnoser | None):
         """
@@ -1168,48 +1459,254 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             raise TypeError("Unsupported type.")
 
     @staticmethod
-    def plot_training_history(d_hist, first_epoch_to_plot=0):
+    def get_session_history_steps(
+            hist: TrainingHistory,
+            include_current_session=False) -> List[Tuple[int, int]]:
+        """
+        Returns a list of (start_step, end_step) tuples that define the the
+        intervals of steps that belong to the history of the current training
+        session. This is used to compute the moving estimate of the training
+        loss. 
+
+        `start_step` corresponds to the beginning of a training session, whereas
+        `end_step - 1` corresponds to the last checkpoint in that session. 
+
+        The current session is not included unless `include_current_session` is
+        True, in which case the last interval contains all steps in the current
+        session. 
+
+        The tuples are non-overlapping and sorted by start_step.
+
+        For example, if 
+
+            hist.l_step_inds_started_training = [0,              5000, 12000,
+            18000] hist.l_step_inds_checkpoints =      [   2000, 4000,
+            8000, 10000,        15000       ]
+
+            This means that at 5000, the checkpoint at 4000 was restored and at
+            12000 the checkpoint at 10000 was restored. The current session
+            starts at 18000, but it is not included in the output.
+    
+            Then, the output will be [(0, 4001), (5000, 10001), (12000, 15001)].
+
+        Another example: if 
+
+            hist.l_step_inds_started_training = [0,             5000, 12000 ]
+            hist.l_step_inds_checkpoints =      [   2000, 4000, 5000, 14000]
+
+            This means that at 5000, the checkpoint at 4000 was restored and a
+            new checkpoint was saved. At 12000, the checkpoint at 5000 was
+            restored. The current session started at 12000 and a new checkpoint
+            was saved, but this is not included in the output.
+
+            Then, the output will be [(0, 4001), (5000, 5001)].
+            
+        """
+        l_sessions = []
+
+        for i in range(len(hist.l_step_inds_started_training) - 1):
+            start_step = hist.l_step_inds_started_training[i]
+            next_session_start = hist.l_step_inds_started_training[i + 1]
+
+            last_checkpoint = None
+            for checkpoint in hist.l_step_inds_checkpoints:
+                if start_step <= checkpoint < next_session_start:
+                    last_checkpoint = checkpoint
+
+            if last_checkpoint is not None:
+                l_sessions.append((start_step, last_checkpoint + 1))
+
+        # Include current session if requested
+        if include_current_session and len(
+                hist.l_step_inds_started_training) > 0:
+            l_sessions.append((hist.ind_first_step_current_session,
+                               len(hist.l_train_loss_per_step)))
+
+        return l_sessions
+
+    @staticmethod
+    def plot_training_history(hist: TrainingHistory, first_step_to_plot=0):
+
+        def split_data_by_session_history(l_x, l_y, l_session_steps,
+                                          current_session_start):
+            """
+            Splits data points into solid (in session history) and dotted (out
+            of session history) point lists.
+            
+            NaN values are inserted at transitions between in and out session
+            history to prevent matplotlib from connecting non-contiguous
+            segments.
+            
+            Returns: (l_x_solid, l_y_solid, l_x_dotted, l_y_dotted)
+            """
+
+            def build_invalid_intervals(l_valid_intervals, min_x, max_x):
+                l_invalid_intervals = []
+
+                # Before first valid interval
+                if l_valid_intervals and min_x < l_valid_intervals[0][0]:
+                    l_invalid_intervals.append(
+                        (min_x, l_valid_intervals[0][0]))
+
+                # Gaps between valid intervals
+                for i in range(len(l_valid_intervals) - 1):
+                    gap_start = l_valid_intervals[i][1]
+                    gap_end = l_valid_intervals[i + 1][0]
+                    if gap_start < gap_end:
+                        l_invalid_intervals.append((gap_start, gap_end))
+
+                # After last valid interval
+                if l_valid_intervals and max_x >= l_valid_intervals[-1][1]:
+                    l_invalid_intervals.append(
+                        (l_valid_intervals[-1][1], max_x + 1))
+
+                return l_invalid_intervals
+
+            l_x_solid = []
+            l_y_solid = []
+            l_x_dotted = []
+            l_y_dotted = []
+
+            if len(l_x) == 0:
+                return l_x_solid, l_y_solid, l_x_dotted, l_y_dotted
+
+            # Build list of all valid intervals (historical sessions + current session)
+            l_valid_intervals = list(l_session_steps)
+            l_valid_intervals.append((current_session_start, max(l_x) + 1))
+
+            # Sort intervals by start
+            l_valid_intervals.sort(key=lambda interval: interval[0])
+
+            # Build invalid intervals (gaps between valid intervals and before/after)
+            min_x = min(l_x)
+            max_x = max(l_x)
+            l_invalid_intervals = build_invalid_intervals(
+                l_valid_intervals, min_x, max_x)
+
+            # Extract points in each valid interval
+            for i, (start, end) in enumerate(l_valid_intervals):
+                if i > 0:
+                    # Add NaN separator between intervals
+                    l_x_solid.append(l_x[0])  # Arbitrary x value
+                    l_y_solid.append(np.nan)
+
+                for x, y in zip(l_x, l_y):
+                    if start <= x < end:
+                        l_x_solid.append(x)
+                        l_y_solid.append(y)
+
+            # Extract points in each invalid interval
+            for i, (start, end) in enumerate(l_invalid_intervals):
+                if i > 0:
+                    # Add NaN separator between intervals
+                    l_x_dotted.append(l_x[0])  # Arbitrary x value
+                    l_y_dotted.append(np.nan)
+
+                for x, y in zip(l_x, l_y):
+                    if start <= x < end:
+                        l_x_dotted.append(x)
+                        l_y_dotted.append(y)
+
+            return l_x_solid, l_y_solid, l_x_dotted, l_y_dotted
 
         def plot_keys(l_keys, margin_coef=0.1):
             max_y_value = -np.inf
             min_y_value = np.inf
-            s1 = Subplot(xlabel="Epoch",
-                         ylabel="Loss",
-                         xlim=(first_epoch_to_plot, None))
-            for key in l_keys:
-                # We skip the curves that are all NaN
-                hasValues = np.any(np.logical_not(np.isnan(d_hist[key])))
-                if hasValues:
-                    s1.add_curve(yaxis=d_hist[key], legend=key)
-                    if len(d_hist[key]) > first_epoch_to_plot:
-                        l_vals = d_hist[key][first_epoch_to_plot:]
-                        if not all(np.isnan(l_vals)):
-                            max_y_value = max(max_y_value, np.nanmax(l_vals))
-                            min_y_value = min(min_y_value, np.nanmin(l_vals))
+            max_x_value = -np.inf
+            s1 = Subplot(xlabel="Step", ylabel="Loss")
+
+            l_session_steps = NeuralNet.get_session_history_steps(hist)
+            current_session_start = hist.l_step_inds_started_training[
+                -1] if hist.l_step_inds_started_training else 0
+
+            for ind_key, key in enumerate(l_keys):
+                lt_step_values = getattr(hist, key)
+                if len(lt_step_values) == 0:
+                    # Add a placeholder to be modified later in case of dynamic plotting
+                    s1.add_curve(yaxis=[np.nan], legend="_")
+                    continue
+                assert isinstance(
+                    lt_step_values[0],
+                    tuple), "Not implemented for non-tuple values."
+                l_x = [t[0] for t in lt_step_values]
+                l_y = [t[1] for t in lt_step_values]
+
+                l_x_solid, l_y_solid, l_x_dotted, l_y_dotted = split_data_by_session_history(
+                    l_x, l_y, l_session_steps, current_session_start)
+
+                if l_x_dotted:
+                    s1.add_curve(xaxis=l_x_dotted,
+                                 yaxis=l_y_dotted,
+                                 legend="_",
+                                 styles=f":#{ind_key}")
+                if l_x_solid:
+                    s1.add_curve(xaxis=l_x_solid,
+                                 yaxis=l_y_solid,
+                                 legend=key,
+                                 styles=f"-#{ind_key}")
+
+                if len(l_y) > first_step_to_plot:
+                    l_vals = l_y[first_step_to_plot:]
+                    max_y_value = max(max_y_value, np.nanmax(l_vals))
+                    min_y_value = min(min_y_value, np.nanmin(l_vals))
+                if len(l_x) > 0:
+                    max_x_value = max(max_x_value, l_x[-1])
             if max_y_value != -np.inf and min_y_value != np.inf:
                 margin = margin_coef * (max_y_value - min_y_value)
                 s1.ylim = (min_y_value - margin, max_y_value + margin)
+            if max_x_value != -np.inf:
+                s1.xlim = (first_step_to_plot, max_x_value)
             return s1
 
         def plot_loss_and_learning_rate():
-            s1 = plot_keys(["train_loss_me", "train_loss", "val_loss"])
-            s2 = Subplot(xlabel="Epoch", ylabel="Learning rate", sharex=True)
-            s2.add_curve(yaxis=d_hist["lr"], legend="Learning rate")
+
+            def plot_restored_checkpoints_and_session_starts(
+                    subplot: Subplot, hist: TrainingHistory):
+                l_step_inds_started_training = hist.l_step_inds_started_training[
+                    1:]  # Exclude the first
+                if not len(l_step_inds_started_training):
+                    # Add placeholders to be modified later in case of dynamic
+                    # plotting
+                    subplot.add_vertical_lines(x_positions=[np.nan],
+                                               style="k",
+                                               legend_str="_")
+                    subplot.add_vertical_lines(x_positions=[np.nan],
+                                               style="r",
+                                               legend_str="_")
+                    return
+
+                l_session_steps = NeuralNet.get_session_history_steps(hist)
+                l_restored_checkpoints = [
+                    end_step - 1 for _, end_step in l_session_steps
+                ]
+
+                subplot.add_vertical_lines(x_positions=l_restored_checkpoints,
+                                           style="k",
+                                           legend_str="Restored checkpoints")
+                subplot.add_vertical_lines(
+                    x_positions=l_step_inds_started_training,
+                    style="r",
+                    legend_str="Session starts")
+
+            s1 = plot_keys(["l_train_loss_me", "l_train_loss", "l_val_loss"])
+            plot_restored_checkpoints_and_session_starts(s1, hist)
+            s2 = Subplot(xlabel="Step", ylabel="Learning rate", sharex=True)
+            s2.add_curve(yaxis=hist.l_lr if len(hist.l_lr) > 0 else [np.nan])
             G = GFigure()
             G.l_subplots = [s1, s2]
             return G
 
         def plot_unnormalized_loss():
-            l_keys = ["unnormalized_train_loss", "unnormalized_val_loss"]
+            l_keys = ["l_unnormalized_train_loss", "l_unnormalized_val_loss"]
             l_keys_to_plot = []
             for key in l_keys:
-                l_vals = d_hist[key]
-                if not all(np.isnan(l_vals)):
+                lt_step_vals = getattr(hist, key)
+                if len(lt_step_vals):
                     l_keys_to_plot.append(key)
             if not len(l_keys_to_plot):
                 return None
             G = GFigure()
-            G.l_subplots = [plot_keys(l_keys)]
+            G.l_subplots = [plot_keys(l_keys_to_plot)]
             return G
 
         l_G = []
@@ -1220,8 +1717,6 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         G2 = plot_unnormalized_loss()
         if G2 is not None:
             l_G.append(G2)
-
-        l_G += d_hist["l_loss_landscapes"]
 
         return l_G
 
