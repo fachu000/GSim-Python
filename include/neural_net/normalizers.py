@@ -507,6 +507,74 @@ class StdFeatNormalizer(FeatNormalizer):
         return values * self.std + self.mean
 
 
+class ScaleToUnitPowerFeatNormalizer(FeatNormalizer):
+    """
+    A feature normalizer that scales values to have unit power.
+    
+    This normalizer scales input by 1/sqrt(E[value²]) so that the power
+    of the output (E[scaled_value²]) becomes 1.
+    """
+
+    l_params_to_save = ["scale_factor"]
+
+    def __init__(self):
+        self.scale_factor: float | None = None
+        self._sum_sq: float = 0.0
+        self._count: int = 0
+
+    def fit(self, values: torch.Tensor):
+        """
+        Accumulate statistics from a batch of values.
+        
+        Args:
+            values: 1D tensor containing values for this feature
+        """
+        if len(values) == 0:
+            return
+
+        values_np = values.cpu().numpy() if isinstance(
+            values, torch.Tensor) else np.array(values)
+
+        self._sum_sq += np.sum(values_np**2)
+        self._count += len(values_np)
+
+        # Update scale factor: 1 / sqrt(E[X²])
+        mean_sq = self._sum_sq / self._count
+        # Avoid division by zero
+        if mean_sq == 0.0:
+            self.scale_factor = 1.0
+        else:
+            self.scale_factor = 1.0 / np.sqrt(mean_sq)
+
+    def normalize(self, values: torch.Tensor) -> torch.Tensor:
+        """
+        Scale values to have unit power.
+        
+        Args:
+            values: 1D tensor containing values to normalize
+            
+        Returns:
+            Normalized values with E[value²] = 1
+        """
+        assert self.scale_factor is not None, \
+            "ScaleToUnitPowerFeatNormalizer must be fitted before normalization"
+        return values * self.scale_factor
+
+    def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
+        """
+        Scale values back to original scale.
+        
+        Args:
+            values: 1D tensor containing normalized values
+            
+        Returns:
+            Unnormalized values
+        """
+        assert self.scale_factor is not None, \
+            "ScaleToUnitPowerFeatNormalizer must be fitted before unnormalization"
+        return values / self.scale_factor
+
+
 class IntervalFeatNormalizer(FeatNormalizer):
     """
     A feature normalizer that scales values to a specified interval.
@@ -554,7 +622,7 @@ class IntervalFeatNormalizer(FeatNormalizer):
 
     def normalize(self, values: torch.Tensor) -> torch.Tensor:
         """
-        Scale values to the target interval.
+        Shift and scale values to the target interval.
         
         Args:
             values: 1D tensor containing values to normalize

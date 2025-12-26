@@ -9,6 +9,7 @@ from gsim.include.neural_net.normalizers import (
     IdentityFeatNormalizer,
     StdFeatNormalizer,
     IntervalFeatNormalizer,
+    ScaleToUnitPowerFeatNormalizer,
     MultiFeatNormalizer,
 )
 
@@ -176,6 +177,135 @@ class TestFeatNormalizers:
         # Check bounds
         assert abs(normalized.min().item() - 10.0) < 1e-5
         assert abs(normalized.max().item() - 20.0) < 1e-5
+
+    def test_scale_to_unit_power_normalizer_basic(self):
+        """Test ScaleToUnitPowerFeatNormalizer with basic data."""
+        normalizer = ScaleToUnitPowerFeatNormalizer()
+
+        # Create test data with known power
+        # values = [1, 2, 3, 4, 5]
+        # E[X²] = (1 + 4 + 9 + 16 + 25) / 5 = 55 / 5 = 11
+        # scale_factor = 1 / sqrt(11) ≈ 0.30151
+        values = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+
+        normalizer.fit(values)
+
+        # Check scale factor
+        expected_scale = 1.0 / np.sqrt(11.0)
+        assert normalizer.scale_factor is not None
+        assert abs(normalizer.scale_factor - expected_scale) < 1e-5
+
+        # Normalize
+        normalized = normalizer.normalize(values)
+
+        # Check that normalized values have unit power: E[normalized²] = 1
+        power = (normalized**2).mean().item()
+        assert abs(power - 1.0) < 1e-5
+
+        # Unnormalize should return original values
+        unnormalized = normalizer.unnormalize(normalized)
+        assert torch.allclose(unnormalized, values, rtol=1e-4, atol=1e-6)
+
+    def test_scale_to_unit_power_normalizer_incremental_fit(self):
+        """Test that ScaleToUnitPowerFeatNormalizer correctly accumulates statistics."""
+        normalizer = ScaleToUnitPowerFeatNormalizer()
+
+        # Fit in batches
+        batch1 = torch.tensor([1.0, 2.0, 3.0])
+        batch2 = torch.tensor([4.0, 5.0, 6.0])
+
+        normalizer.fit(batch1)
+        normalizer.fit(batch2)
+
+        # Should have computed E[X²] over all values [1,2,3,4,5,6]
+        # E[X²] = (1 + 4 + 9 + 16 + 25 + 36) / 6 = 91 / 6 ≈ 15.1667
+        # scale_factor = 1 / sqrt(91/6) ≈ 0.2567
+        expected_mean_sq = 91.0 / 6.0
+        expected_scale = 1.0 / np.sqrt(expected_mean_sq)
+
+        assert normalizer.scale_factor is not None
+        assert abs(normalizer.scale_factor - expected_scale) < 1e-5
+
+        # Verify unit power
+        all_values = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        normalized = normalizer.normalize(all_values)
+        power = (normalized**2).mean().item()
+        assert abs(power - 1.0) < 1e-5
+
+    def test_scale_to_unit_power_normalizer_zero_values(self):
+        """Test ScaleToUnitPowerFeatNormalizer with all zero values."""
+        normalizer = ScaleToUnitPowerFeatNormalizer()
+
+        # All zero values
+        values = torch.tensor([0.0, 0.0, 0.0, 0.0])
+        normalizer.fit(values)
+
+        # Should set scale_factor to 1.0 to avoid division by zero
+        assert normalizer.scale_factor == 1.0
+
+        # Normalization should keep zeros as zeros
+        normalized = normalizer.normalize(values)
+        assert torch.allclose(normalized, values)
+
+    def test_scale_to_unit_power_normalizer_unit_values(self):
+        """Test ScaleToUnitPowerFeatNormalizer when E[X²] = 1."""
+        normalizer = ScaleToUnitPowerFeatNormalizer()
+
+        # Create values where E[X²] is already 1
+        # For example: values that already have unit power
+        # sqrt(0.5²+0.5²+0.5²+0.5²)/4 would give E[X²] = 0.25, so let's use ±1
+        # E[1² + (-1)²] / 2 = 2/2 = 1
+        values = torch.tensor([1.0, -1.0, 1.0, -1.0])
+
+        normalizer.fit(values)
+
+        # scale_factor should be 1/sqrt(1) = 1
+        assert abs(normalizer.scale_factor - 1.0) < 1e-5
+
+        # Normalized values should be the same
+        normalized = normalizer.normalize(values)
+        assert torch.allclose(normalized, values, rtol=1e-5)
+
+    def test_scale_to_unit_power_normalizer_negative_values(self):
+        """Test ScaleToUnitPowerFeatNormalizer with negative values."""
+        normalizer = ScaleToUnitPowerFeatNormalizer()
+
+        # Mix of positive and negative values
+        values = torch.tensor([-3.0, -1.0, 0.0, 2.0, 4.0])
+        # E[X²] = (9 + 1 + 0 + 4 + 16) / 5 = 30 / 5 = 6
+        # scale_factor = 1 / sqrt(6) ≈ 0.4082
+
+        normalizer.fit(values)
+
+        expected_scale = 1.0 / np.sqrt(6.0)
+        assert abs(normalizer.scale_factor - expected_scale) < 1e-5
+
+        # Normalize and check power
+        normalized = normalizer.normalize(values)
+        power = (normalized**2).mean().item()
+        assert abs(power - 1.0) < 1e-5
+
+        # Unnormalize
+        unnormalized = normalizer.unnormalize(normalized)
+        assert torch.allclose(unnormalized, values, rtol=1e-4)
+
+    def test_scale_to_unit_power_normalizer_large_values(self):
+        """Test ScaleToUnitPowerFeatNormalizer with large values."""
+        normalizer = ScaleToUnitPowerFeatNormalizer()
+
+        # Large values to test numerical stability
+        values = torch.tensor([100.0, 200.0, 300.0, 400.0, 500.0])
+
+        normalizer.fit(values)
+        normalized = normalizer.normalize(values)
+
+        # Should still have unit power
+        power = (normalized**2).mean().item()
+        assert abs(power - 1.0) < 1e-5
+
+        # Round-trip
+        unnormalized = normalizer.unnormalize(normalized)
+        assert torch.allclose(unnormalized, values, rtol=1e-4)
 
 
 class TestMultiFeatNormalizer:

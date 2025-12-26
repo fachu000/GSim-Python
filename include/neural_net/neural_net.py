@@ -749,7 +749,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
     def fit(self,
             dataset: Dataset,
-            f_loss: Callable,
+            f_loss: LossFunType,
             optimizer,
             lr_scheduler: _LRScheduler | LRScheduler | None = None,
             num_epochs=None,
@@ -799,7 +799,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         Args:
             `dataset` (Dataset): The training dataset.
 
-            `f_loss` (Callable): The loss function f_loss(output_batch,
+            `f_loss` (LossFunType): The loss function f_loss(output_batch,
             target_batch). It should return a vector of shape (batch_size,).
 
             `optimizer`: The optimizer to use.
@@ -1691,6 +1691,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             s1 = plot_keys(["l_train_loss_me", "l_train_loss", "l_val_loss"])
             plot_restored_checkpoints_and_session_starts(s1, hist)
             s2 = Subplot(xlabel="Step", ylabel="Learning rate", sharex=True)
+            s2.xlim = s1.xlim
             s2.add_curve(yaxis=hist.l_lr if len(hist.l_lr) > 0 else [np.nan])
             G = GFigure()
             G.l_subplots = [s1, s2]
