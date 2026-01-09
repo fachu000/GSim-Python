@@ -269,8 +269,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     def _assert_initialized(self):
         assert self._initialized, "The network has not been initialized. A subclass of NeuralNet must call self.initialize() at the end of its constructor."
 
-    @staticmethod
-    def collate_fn(*args, no_targets=False, **kwargs):
+    def collate_fn(self, *args, no_targets=False, **kwargs):
         # Override if needed
         return default_collate(*args, **kwargs)
 
@@ -1348,7 +1347,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 hist.l_lr.append(optimizer.param_groups[0]["lr"])
 
                 # Moving-metric evaluation
-                if ind_step % num_steps_eval_moving == 0:
+                if ind_step and ind_step % num_steps_eval_moving == 0:
+                    # Moving-metrics not evaluated when ind_step == 0 because
+                    # that potentially results in a very noisy value which may
+                    # ruin reporting the best value so far.
                     eval_moving_metrics(ind_step, hist)
                     self.save_hist(hist)
 
