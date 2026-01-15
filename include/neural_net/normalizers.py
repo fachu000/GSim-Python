@@ -15,7 +15,6 @@ from torch.utils.data import (DataLoader, Dataset, Subset, default_collate,
 from tqdm import tqdm
 
 from .defs import InputType, OutputType, TargetType, LossFunType
-from gsim.gfigure import Subplot
 
 gsim_logger = logging.getLogger("gsim")
 

@@ -22,7 +22,7 @@ from gsim.include.utils.statistics import mean_and_ci
 from .normalizers import Normalizer, DefaultNormalizer
 
 from .defs import InputType, OutputType, TargetType, LossFunType
-from gsim.gfigure import Subplot
+from ...gfigure import Subplot
 
 try:
     from ....gsim import GFigure
