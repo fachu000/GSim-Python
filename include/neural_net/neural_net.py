@@ -17,7 +17,7 @@ from torch.utils.data import (DataLoader, Dataset, Subset, default_collate,
 from torch.optim.lr_scheduler import _LRScheduler, LRScheduler
 from tqdm import tqdm
 
-from gsim.include.utils.statistics import mean_and_ci
+from ...include.utils.statistics import mean_and_ci
 
 from .normalizers import Normalizer, DefaultNormalizer
 
