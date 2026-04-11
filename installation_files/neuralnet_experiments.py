@@ -18,6 +18,7 @@ from tqdm import tqdm
 import gsim
 from gsim.gfigure import GFigure
 from gsim.include.neural_net import NeuralNet, WarmupCosineMinLRScheduler
+from gsim.include.neural_net.data_adapter import DataAdapter
 from gsim.include.neural_net.normalizers import (
     MultiFeatNormalizer,
     StdFeatNormalizer,
@@ -489,9 +490,155 @@ class ExperimentSet(gsim.AbstractExperimentSet):
 
         return net.plot_training_history(d_training_history)
 
+    # Experiment illustrating DataAdapter.extract_feats.
+    #
+    # Scenario: the raw dataset contains 1-D signals (time series). Feature
+    # extraction is performed by SignalAdapter, which computes the mean and
+    # standard deviation of each signal, reducing the 50-sample input to a
+    # 2-element feature vector.  The network is then trained to predict the
+    # target from those two features.
+    #
+    # The experiment highlights two usage modes:
+    #   (a) On-the-fly extraction: pass the raw dataset directly to fit().
+    #       NeuralNet applies extract_feats automatically in the data loader.
+    #   (b) Pre-computed extraction: call load_or_create_preprocessed_dataset()
+    #       to materialise and cache the feature vectors on disk, then pass the
+    #       cached dataset to fit().  Useful when extract_feats is expensive.
+    def experiment_1006(l_args):
+
+        # ------------------------------------------------------------------
+        # Dataset: each item is a (signal, target) pair.
+        #   signal  : Tensor of shape (50,)  — a noisy sinusoid
+        #   target  : Tensor of shape (1,)   — amplitude of the sinusoid
+        # ------------------------------------------------------------------
+        class RawSignalDataset(Dataset):
+
+            def __init__(self, num_examples, seed=0):
+                rng = torch.Generator()
+                rng.manual_seed(seed)
+                t = torch.linspace(0, 2 * np.pi, 50)
+                # Random amplitude in [1, 5]
+                amplitudes = 1 + 4 * torch.rand(num_examples, 1,
+                                                 generator=rng)
+                signals = amplitudes * torch.sin(t).unsqueeze(0)
+                signals += 0.2 * torch.randn(num_examples, 50, generator=rng)
+                self.signals = signals       # (N, 50)
+                self.targets = amplitudes    # (N, 1)
+
+            def __len__(self):
+                return len(self.signals)
+
+            def __getitem__(self, idx):
+                return self.signals[idx], self.targets[idx]
+
+        # ------------------------------------------------------------------
+        # DataAdapter: compress each 50-sample signal to [mean, std].
+        # ------------------------------------------------------------------
+        class SignalAdapter(DataAdapter):
+
+            def extract_feats(self, signal: torch.Tensor) -> torch.Tensor:
+                """Return [mean, std] of the signal — shape (2,)."""
+                return torch.stack([signal.mean(), signal.std()])
+
+        # ------------------------------------------------------------------
+        # Network: takes 2 extracted features, predicts amplitude.
+        # ------------------------------------------------------------------
+        class SignalNet(NeuralNet):
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.fc1 = nn.Linear(2, 16)
+                self.fc2 = nn.Linear(16, 1)
+                self.initialize()
+
+            def forward(self, x):
+                x = torch.relu(self.fc1(x))
+                return self.fc2(x)
+
+        f_loss = lambda pred, target: (pred - target).pow(2).mean(dim=1)
+
+        torch.manual_seed(0)
+        np.random.seed(0)
+
+        dataset_train = RawSignalDataset(2000, seed=0)
+        dataset_val = RawSignalDataset(500, seed=1)
+
+        # ------------------------------------------------------------------
+        # Mode (a): on-the-fly extraction.
+        # The adapter is set on the network; make_data_loader and
+        # fit_normalizer_if_needed apply extract_feats automatically.
+        # ------------------------------------------------------------------
+        print("Mode (a): on-the-fly feature extraction")
+        net_a = SignalNet(data_adapter=SignalAdapter(), normalizer="both")
+        hist_a = net_a.fit(
+            dataset_train,
+            f_loss,
+            optimizer=torch.optim.Adam(net_a.parameters(), lr=1e-3),
+            dataset_val=dataset_val,
+            num_epochs=30,
+            batch_size=64,
+        )
+        print("  val loss:", net_a.evaluate(dataset_val, 64, f_loss)["loss"])
+
+        # ------------------------------------------------------------------
+        # Mode (b): pre-computed extraction with caching.
+        # load_or_create_preprocessed_dataset materialises all feature vectors
+        # once and saves them to disk.  Subsequent runs load from disk and skip
+        # extraction entirely.
+        # ------------------------------------------------------------------
+        print("Mode (b): pre-computed feature extraction with caching")
+        cache_dir = tempfile.mkdtemp(prefix="gsim_adapter_")
+        net_b = SignalNet(data_adapter=SignalAdapter(), normalizer="both")
+
+        adapted_train = net_b.load_or_create_preprocessed_dataset(
+            dataset_train,
+            path=os.path.join(cache_dir, "train_adapted.pk"),
+        )
+        adapted_val = net_b.load_or_create_preprocessed_dataset(
+            dataset_val,
+            path=os.path.join(cache_dir, "val_adapted.pk"),
+        )
+
+        # The adapted datasets already have adapted=True, so extract_feats
+        # will not be applied again by make_data_loader.
+        hist_b = net_b.fit(
+            adapted_train,
+            f_loss,
+            optimizer=torch.optim.Adam(net_b.parameters(), lr=1e-3),
+            dataset_val=adapted_val,
+            num_epochs=30,
+            batch_size=64,
+        )
+        print("  val loss:", net_b.evaluate(adapted_val, 64, f_loss)["loss"])
+
+        # ------------------------------------------------------------------
+        # Mode (b) with callback: the raw dataset is only instantiated if the
+        # cached file does not yet exist.
+        # ------------------------------------------------------------------
+        net_b2 = SignalNet(data_adapter=SignalAdapter(), normalizer="both")
+        adapted_train2 = net_b2.load_or_create_preprocessed_dataset(
+            lambda: RawSignalDataset(2000, seed=0),  # callback form
+            path=os.path.join(cache_dir, "train_adapted.pk"),
+        )
+        # File already exists from above, so RawSignalDataset is never built.
+        assert adapted_train2.adapted is True
+
+        # ------------------------------------------------------------------
+        # Plot training curves for both modes
+        # ------------------------------------------------------------------
+        l_G = net_a.plot_training_history(hist_a)
+        if l_G:
+            l_G[0].l_subplots[0].title = "On-the-fly extraction"
+
+        l_G_b = net_b.plot_training_history(hist_b)
+        if l_G_b:
+            l_G_b[0].l_subplots[0].title = "Pre-computed extraction"
+
+        return l_G + l_G_b
+
     # Experiment to illustrate live plotting
     # WIP: improve the network or make the function simpler.
-    def experiment_1006(l_args):
+    def experiment_1007(l_args):
 
         class MyDataset(Dataset):
 
@@ -569,3 +716,4 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                                      live_plot=True)
 
         return net.plot_training_history(d_training_history)
+

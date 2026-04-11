@@ -7,6 +7,8 @@ import torch
 # for batches and inputs/outputs/targets due to limitations in the Python typing
 # system.
 
+RawInputType = TypeVar("RawInputType", torch.Tensor, list[torch.Tensor],
+                       tuple[torch.Tensor, ...])
 InputType = TypeVar("InputType", torch.Tensor, list[torch.Tensor],
                     tuple[torch.Tensor, ...])
 OutputType = TypeVar("OutputType", torch.Tensor, list[torch.Tensor],

@@ -20,6 +20,7 @@ from tqdm import tqdm
 from ...include.utils.statistics import mean_and_ci
 
 from .normalizers import Normalizer, DefaultNormalizer
+from .data_adapter import DataAdapter
 
 from .defs import InputType, OutputType, TargetType, LossFunType
 from ...gfigure import Subplot
@@ -177,6 +178,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  *args,
                  nn_folder=None,
                  normalizer: Union[None, Normalizer, str] = None,
+                 data_adapter: Union[None, DataAdapter] = None,
                  device_type: Union[None, str] = None,
                  num_workers: int = 0,
                  **kwargs):
@@ -229,6 +231,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             self.normalizer = normalizer
         else:
             raise ValueError("Invalid normalizer type.")
+
+        self.data_adapter = data_adapter
 
         # Other initializations
         self._diagnoser: Union[None, Diagnoser] = None
@@ -526,14 +530,107 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         def __init__(self, l_items: \
                      list[InputType] | torch.Tensor
-                     | tuple[InputType] | list[InputType]):
+                     | tuple[InputType] | list[InputType],
+                     adapted: bool = False):
             self.l_items = l_items
+            self.adapted = adapted
 
         def __len__(self):
             return len(self.l_items)  # type: ignore
 
         def __getitem__(self, idx):
             return self.l_items[idx]
+
+        def save(self, path: str):
+            with open(path, "wb") as f:
+                pickle.dump({"l_items": self.l_items, "adapted": self.adapted},
+                            f)
+
+        @classmethod
+        def load(cls, path: str) -> 'NeuralNet.NeuralNetDataset':
+            with open(path, "rb") as f:
+                d = pickle.load(f)
+            return cls(l_items=d["l_items"], adapted=d["adapted"])
+
+    def preprocess_dataset(self, dataset: Dataset,
+                           no_targets: bool = False) -> Dataset:
+        """Return a lazy wrapper dataset that applies data_adapter.extract_feats
+        to each input.
+
+        Args:
+            dataset: The raw dataset. If `no_targets` is False, each item is a
+                (raw_input, target) pair; otherwise each item is a raw_input.
+            no_targets: If True, the dataset contains only inputs (no targets).
+
+        Returns:
+            A Dataset with `adapted=True` that applies `extract_feats`
+            on-the-fly in `__getitem__`.
+        """
+        assert self.data_adapter is not None, \
+            "preprocess_dataset requires data_adapter to be set."
+            
+        assert getattr(dataset, "adapted", False) is False, \
+            "Dataset is already adapted."
+            
+        adapter = self.data_adapter
+
+        class _AdaptedDataset(Dataset):
+            adapted = True
+
+            def __init__(self, inner, no_targets):
+                self._inner = inner
+                self._no_targets = no_targets
+
+            def __len__(self):
+                return len(self._inner)  # type: ignore
+
+            def __getitem__(self, idx):
+                item = self._inner[idx]
+                if self._no_targets:
+                    return adapter.extract_feats(item)
+                raw_input, target = item
+                return adapter.extract_feats(raw_input), target
+
+        return _AdaptedDataset(dataset, no_targets)
+
+    def load_or_create_preprocessed_dataset(
+            self,
+            dataset_or_callback,
+            path: str,
+            no_targets: bool = False) -> 'NeuralNet.NeuralNetDataset':
+        """Load a preprocessed dataset from disk or create and save it.
+
+        Args:
+            dataset_or_callback: Either a Dataset or a callable that returns a
+                Dataset. The callable form avoids loading the dataset into
+                memory when the preprocessed file already exists.
+            path: File path for saving/loading the preprocessed dataset.
+            no_targets: Passed to `preprocess_dataset`.
+
+        Returns:
+            A NeuralNetDataset with adapted=True.
+        """
+        if os.path.exists(path):
+            gsim_logger.info(
+                f"Loading preprocessed dataset from {path}")
+            ds_out = NeuralNet.NeuralNetDataset.load(path)
+            assert getattr(ds_out, "adapted", False) is True, \
+                "The loaded dataset is not adapted. This may be because `path` points to a file that was not created by `preprocess_dataset`. To fix this, delete the file at `path` and run again."
+            return ds_out
+
+        dataset = dataset_or_callback() if callable(
+            dataset_or_callback) else dataset_or_callback
+
+        assert hasattr(dataset, '__len__'), \
+            ("Only datasets with a finite length can be preprocessed and saved to disk.")
+
+        gsim_logger.info(
+            f"Preprocessing dataset and saving to {path}...")
+        adapted = self.preprocess_dataset(dataset, no_targets=no_targets)
+        l_items = [adapted[i] for i in range(len(adapted))]  # type: ignore
+        nn_dataset = NeuralNet.NeuralNetDataset(l_items, adapted=True)
+        nn_dataset.save(path)
+        return nn_dataset
 
     def predict(self,
                 data: Union[torch.Tensor, tuple[InputType], list[InputType],
@@ -701,6 +798,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             Else, it contains both inputs and targets.
 
         """
+        if self.data_adapter is not None and not getattr(
+                dataset, 'adapted', False):
+            dataset = self.preprocess_dataset(dataset, no_targets=no_targets)
+
         # MPS requires 'fork' multiprocessing context to work with num_workers > 0
         # See: https://github.com/pytorch/pytorch/issues/87688
         mp_context = 'fork' if (self.num_workers
@@ -940,7 +1041,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             assert self.normalizer is not None
             if not self.normalizer.are_parameters_set:
                 gsim_logger.info("Fitting the normalizer...")
-                self.normalizer.fit(dataset_train)
+                fit_dataset = dataset_train
+                if self.data_adapter is not None and not getattr(
+                        dataset_train, 'adapted', False):
+                    fit_dataset = self.preprocess_dataset(dataset_train,
+                                                          no_targets=False)
+                self.normalizer.fit(fit_dataset)
                 self.normalizer.save()
             else:
                 gsim_logger.info(
