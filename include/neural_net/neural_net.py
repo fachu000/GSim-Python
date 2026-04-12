@@ -496,10 +496,15 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  dataset,
                  batch_size,
                  f_loss: LossFunType,
+                 no_targets=False,
                  unnormalized=True,
                  max_hci=None):
         """
         Args:
+
+            `no_targets` (bool): If True, the dataset contains only inputs.
+            Else, it contains pairs (input, target). This is needed e.g. for
+            unsupervised learning.
 
             `unnormalized`: If True, the unnormalized loss is returned. If no
             Normalizer is set, then the loss is already unnormalized.
@@ -519,7 +524,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         if unnormalized and self.normalizer is not None:
             f_loss = self.make_unnormalized_loss(f_loss)
 
-        dataloader = self.make_data_loader(dataset, batch_size)
+        dataloader = self.make_data_loader(dataset, batch_size, no_targets=no_targets)
         self.eval()
         loss, hci = self._eval_static_metric(dataloader,
                                              f_loss=f_loss,
@@ -850,8 +855,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     def fit(self,
             dataset: Dataset,
             f_loss: LossFunType,
-            optimizer,
+            optimizer,            
             lr_scheduler: _LRScheduler | LRScheduler | None = None,
+            no_targets=False,
             num_epochs=None,
             num_steps=None,
             dataset_val=None,
@@ -903,6 +909,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             target_batch). It should return a vector of shape (batch_size,).
 
             `optimizer`: The optimizer to use.
+
+            `no_targets` (bool): If True, the datasets (training and validation)
+            contain only inputs. Else, they contain pairs (input, target).
+            Default is False. This is needed e.g. for unsupervised learning.
 
             `lr_scheduler` (_LRScheduler | LRScheduler | None): The learning
             rate scheduler.
@@ -994,8 +1004,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `live_plot` (bool): If True, a live plot of the training history is
             shown during training.
 
-            `live_plot_interval` (int): Number of ms between updates of the
-            live plot.
+            `live_plot_interval` (int): Number of ms between updates of the live
+            plot.
 
         Returns:
             TrainingHistory: An object containing the training history.
@@ -1409,11 +1419,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         # Instantiate the data loaders
         dataloader_train = self.make_data_loader(dataset_train, batch_size,
-                                                 shuffle)
+                                                 shuffle, no_targets=no_targets)
         dataloader_train_eval = self.make_data_loader(dataset_train,
-                                                      batch_size_eval, shuffle)
+                                                      batch_size_eval, shuffle, no_targets=no_targets)
         dataloader_val = self.make_data_loader(dataset_val, batch_size,
-                                               shuffle) if val else None
+                                               shuffle, no_targets=no_targets) if val else None
 
         # History initialization
         hist = self.load_hist()
