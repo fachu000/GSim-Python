@@ -1055,7 +1055,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 if self.data_adapter is not None and not getattr(
                         dataset_train, 'adapted', False):
                     fit_dataset = self.preprocess_dataset(dataset_train,
-                                                          no_targets=False)
+                                                          no_targets=no_targets)
                 self.normalizer.fit(fit_dataset)
                 self.normalizer.save()
             else:
