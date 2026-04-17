@@ -878,7 +878,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             obtain_static_training_loss=False,
             max_grad_norm: float | None = None,
             live_plot=False,
-            live_plot_interval=1000) -> TrainingHistory:
+            live_plot_interval=1000,
+            num_significant_figures=4) -> TrainingHistory:
         """ 
         Starts a training session.
 
@@ -1007,6 +1008,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `live_plot_interval` (int): Number of ms between updates of the live
             plot.
 
+            `num_significant_figures` (int): Number of significant figures used
+            when printing loss values and other relevant floats. Default is 4.
+
         Returns:
             TrainingHistory: An object containing the training history.
         """
@@ -1089,13 +1093,13 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         def get_log_loss_str(l_loss, hci=None):
             l_vals = [t[1] for t in l_loss]
-            str_val = f"{l_vals[-1]:.4f}"
+            str_val = f"{l_vals[-1]:.{num_significant_figures}g}"
             if hci is not None:
-                str_val += f" ± {hci:.4f}"
+                str_val += f" ± {hci:.{num_significant_figures}g}"
             if l_vals[-1] == min(l_vals):
                 return f"{str_val} (best ⭐)"
             else:
-                return f"{str_val} (best {min(l_vals):.4f})"
+                return f"{str_val} (best {min(l_vals):.{num_significant_figures}g})"
 
         def get_log_step_str(ind_step):
             if ind_step % num_steps_per_epoch == 0:
@@ -1448,6 +1452,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                             interval=live_plot_interval,
                                             background=True)
 
+        # Training loop
         done = False
         while not done:
             for batch in dataloader_train:
