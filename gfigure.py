@@ -58,6 +58,10 @@ ylim :
 
 zlim : tuple, endpoints for the z axis. Used e.g. for the color scale. 
 
+logx: bool, whether to use a logarithmic scale for the x-axis.
+
+logy: bool, whether to use a logarithmic scale for the y-axis.
+
 yticks: None or 1D array like. If None, the default ticks are used. If 1D array
 like, it specifies the ticks. yticks can be set to an empty list for no ticks.
 
@@ -620,6 +624,8 @@ class Subplot:
                  create_curves=True,
                  num_legend_cols=1,
                  sharex=None,
+                 logx=False,
+                 logy=False,
                  **kwargs):
         """
       For a description of the arguments, see GFigure.__init__
@@ -642,6 +648,8 @@ class Subplot:
         self.num_legend_cols = num_legend_cols
         self.l_curves: list[Curve] = []
         self.sharex = sharex
+        self.logx = logx
+        self.logy = logy
         self.axes: Axes | None = None  # Handle to the subplot axis
         if create_curves:
             self.add_curve(**kwargs)
@@ -996,6 +1004,12 @@ class Subplot:
         if "grid" in dir(self):  # backwards compatibility
             self.axes.grid(self.grid)
 
+        # Apply logarithmic scales
+        if "logx" in dir(self) and self.logx:
+            self.axes.set_xscale('log')
+        if "logy" in dir(self) and self.logy:
+            self.axes.set_yscale('log')
+
         if "xlim" in dir(self):  # backwards compatibility
             if self.xlim:
                 if regenerating and type(self.xlim) == tuple and np.any(
@@ -1031,7 +1045,8 @@ class Subplot:
                                         1]:  # Avoids a warning if a curve is constant.
                                     self.axes.set_ylim(ylims)
                             except ValueError:
-                                pass
+                                pass       
+
         return self.axes
 
     def get_image(self):
@@ -1067,7 +1082,7 @@ class Subplot:
         It first finds the minimum and maximum y-values among all 2D curves
         within the x-limits if specified.
 
-        Then returns (y_min - self.ylim * (y_max - y_min), y_max + self.ylim *
+        Then returns (y_min - ylim_factor * (y_max - y_min), y_max + ylim_factor *
         (y_max - y_min)).
         """
         assert isinstance(ylim_factor, float), "ylim_factor must be a float"
@@ -1102,7 +1117,14 @@ class Subplot:
             raise ValueError(
                 "Could not determine automatic y-limits; no 2D curves found.")
         y_range = y_max - y_min
-        return (y_min - ylim_factor * y_range, y_max + ylim_factor * y_range)
+        ylim = (y_min - ylim_factor * y_range, y_max + ylim_factor * y_range)
+        
+        if "logy" in dir(self) and self.logy:
+            # We cannot pass negative y-limits to matplotlib when using a logarithmic scale. 
+            if ylim[0] <= 0:
+                ylim = (y_min, y_max + ylim_factor * y_range)
+        
+        return ylim
 
 
 class GFigure:

@@ -951,7 +951,15 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `num_steps_eval_moving` (int | None): Number of steps between moving
             metric evaluations. A moving metric evaluation means that the
             network weights are updated between batches, i.e., there is gradient
-            noise.
+            noise. Note that the *instantaneous* training loss is evaluated at
+            every training step. However, the moving estimate of the training
+            loss, which results from averaging the past values of the
+            instantaneous training loss over the relevant steps, is evaluated
+            only every `num_steps_eval_moving` steps. By "relevant", we mean
+            that the past steps after checkpoint restorations that were not part
+            of a later checkpoint are not included in the average. Adjust
+            `num_steps_eval_moving` to print the moving estimate of the training
+            loss every few seconds. 
 
             `num_steps_checkpoint` (int | None): Number of steps between
             checkpoints.
@@ -1497,6 +1505,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     break
 
         if restore_best_checkpoint and hist.l_step_inds_checkpoints:
+            gsim_logger.info("Restoring the best checkpoint at the end of training.")
             load_checkpoint()
 
         # Terminate the plotting process if running
@@ -1648,7 +1657,31 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         return l_sessions
 
     @staticmethod
-    def plot_training_history(hist: TrainingHistory, first_step_to_plot=0):
+    def plot_training_history(hist: TrainingHistory, first_step_to_plot=0, logx=False, logy=False):
+        """
+        Plots the training history of a neural network.
+
+        Generates one or more GFigure objects visualizing the training history,
+        including loss curves and learning rate evolution. Distinguishes between
+        steps that are part of the training history (solid lines) and steps
+        outside the history due to checkpoint restoration (dotted lines).
+
+        Args:
+            hist (TrainingHistory): The training history object containing loss
+                values, learning rates, and checkpoint information.
+            first_step_to_plot (int, optional): The first step index to include
+                in the plot. Steps before this index are excluded from the view.
+                Defaults to 0.
+            logx (bool, optional): If True, the x-axis uses a logarithmic scale.
+                Defaults to False.
+            logy (bool, optional): If True, the y-axis uses a logarithmic scale.
+                Defaults to False.
+
+        Returns:
+            list[GFigure]: A list of GFigure objects. The first figure shows loss
+                curves (train_loss_me, train_loss, val_loss) and learning rate
+                evolution. Additional figures show unnormalized losses if available.
+        """
 
         def split_data_by_session_history(l_x, l_y, l_session_steps,
                                           current_session_start):
@@ -1736,7 +1769,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             max_y_value = -np.inf
             min_y_value = np.inf
             max_x_value = -np.inf
-            s1 = Subplot(xlabel="Step", ylabel="Loss")
+            s1 = Subplot(xlabel="Step", ylabel="Loss", logx=logx, logy=logy)
 
             l_session_steps = NeuralNet.get_session_history_steps(hist)
             current_session_start = hist.l_step_inds_started_training[
@@ -1776,9 +1809,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     max_x_value = max(max_x_value, l_x[-1])
             if max_y_value != -np.inf and min_y_value != np.inf:
                 margin = margin_coef * (max_y_value - min_y_value)
-                s1.ylim = (min_y_value - margin, max_y_value + margin)
+                if not logy: # not implemented for logy == True
+                    s1.ylim = (min_y_value - margin, max_y_value + margin)
             if max_x_value != -np.inf:
-                s1.xlim = (first_step_to_plot, max_x_value)
+                if not logx: # not implemented for logx == True
+                    s1.xlim = (first_step_to_plot, max_x_value)
             return s1
 
         def plot_loss_and_learning_rate():
@@ -1808,12 +1843,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                            legend_str="Restored checkpoints")
                 subplot.add_vertical_lines(
                     x_positions=l_step_inds_started_training,
-                    style="r",
+                    style="r--",
                     legend_str="Session starts")
 
             s1 = plot_keys(["l_train_loss_me", "l_train_loss", "l_val_loss"])
             plot_restored_checkpoints_and_session_starts(s1, hist)
-            s2 = Subplot(xlabel="Step", ylabel="Learning rate", sharex=True)
+            s2 = Subplot(xlabel="Step", ylabel="Learning rate", sharex=True, logx=logx, logy=logy)
             s2.xlim = s1.xlim
             s2.add_curve(yaxis=hist.l_lr if len(hist.l_lr) > 0 else [np.nan])
             G = GFigure()
