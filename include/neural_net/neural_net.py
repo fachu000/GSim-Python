@@ -1478,6 +1478,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         while not done:
             for batch in dataloader_train:
 
+                if ind_step >= hist.ind_first_step_current_session + num_steps:
+                    done = True
+                    break
+
                 # Training step
                 self.train()
                 time_start_step = time.perf_counter()
@@ -1513,9 +1517,6 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     break
 
                 ind_step += 1
-                if ind_step >= hist.ind_first_step_current_session + num_steps:
-                    done = True
-                    break
 
         if restore_best_checkpoint and hist.l_step_inds_checkpoints:
             gsim_logger.info(
