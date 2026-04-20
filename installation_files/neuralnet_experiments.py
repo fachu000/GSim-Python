@@ -356,7 +356,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         def plot_data():
             preds = [
                 float(p[0]) for p in net.predict(test_dataset,
-                                                 dataset_includes_targets=True)
+                                                 no_targets=False)
             ]
             feat = [float(data[0]) for data in test_dataset]
             true_target = [float(data[1]) for data in test_dataset]

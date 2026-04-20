@@ -207,7 +207,7 @@ def test_predict_when_the_input_is_a_list_and_the_output_is_a_tuple():
         zip(inputs, outputs)))  # type: ignore
     outputs = net.predict(example_dataset,
                           batch_size=4,
-                          dataset_includes_targets=True)
+                          no_targets=False)
     assert isinstance(outputs, Dataset)
     assert len(outputs) == 7
     for ind_output in range(7):

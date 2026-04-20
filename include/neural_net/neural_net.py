@@ -645,7 +645,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                             Dataset],
                 batch_size=32,
                 unnormalize=True,
-                dataset_includes_targets=None,
+                no_targets=None,
                 output_class: None | type[torch.Tensor] | type[list]
                 | type[tuple] | type[Dataset] = None):
         """
@@ -665,13 +665,13 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `unnormalize`: if True, the outputs are unnormalized before being
             returned.
             
-            `dataset_includes_targets`: 
-                - If `dataset_includes_targets` is False, the Dataset contains N
-                  inputs, i.e., dataset[n] is the n-th input.
-                - If `dataset_includes_targets` is True, the Dataset contains N
-                  pairs (input, target), i.e., dataset[n][0] is the n-th input.             
-                By default, `dataset_includes_targets` is set to False, since
-                this is the most common case for prediction. 
+            `no_targets`:
+                - If `no_targets` is True, the data contains only inputs. For
+                  example, if `data` is a dataset, then data[n] is the n-th input.
+                - If `no_targets` is False, the data contains N pairs (input,
+                  target). If `data` is a dataset, data[n][0] is the n-th input.
+                By default, `no_targets` is set to True, since this is the most
+                common case for prediction.
                   
 
         Returns:
@@ -726,7 +726,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         self._assert_initialized()
 
-        dataset_includes_targets = False if dataset_includes_targets is None else dataset_includes_targets
+        no_targets = True if no_targets is None else no_targets
 
         if not unnormalize and self.normalizer is None:
             raise ValueError(
@@ -736,18 +736,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         else:
             dataset = data
             if len(dataset) > 0:  # type: ignore
-                if dataset_includes_targets:
+                if not no_targets:
                     assert (len(dataset[0]) == 2)  # type: ignore
 
-        data_loader = self.make_data_loader(
-            dataset,
-            batch_size=batch_size,
-            no_targets=not dataset_includes_targets)
+        data_loader = self.make_data_loader(dataset,
+                                            batch_size=batch_size,
+                                            no_targets=no_targets)
         l_out = []
         self.eval()
         for batch in data_loader:
             # Ignore the targets if present
-            input_batch = batch[0] if dataset_includes_targets else batch
+            input_batch = batch[0] if not no_targets else batch
 
             # Run the forward pass
             input_batch = self._move_to_device(input_batch)
