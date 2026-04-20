@@ -8,10 +8,10 @@ from torch.utils.data import Dataset
 from gsim.include.neural_net import NeuralNet
 from gsim.include.neural_net.data_adapter import DataAdapter
 
-
 # ---------------------------------------------------------------------------
 # Helpers (module-level for picklability)
 # ---------------------------------------------------------------------------
+
 
 class _DoubleAdapter(DataAdapter):
     """Multiplies every element of the input tensor by 2."""
@@ -24,10 +24,10 @@ class _SimpleDataset(Dataset):
     """Dataset of (input, target) pairs."""
 
     def __init__(self, n=10, feat_dim=4, target_dim=2):
-        self.inputs = torch.arange(n * feat_dim, dtype=torch.float).reshape(
-            n, feat_dim)
-        self.targets = torch.arange(n * target_dim, dtype=torch.float).reshape(
-            n, target_dim)
+        self.inputs = torch.arange(n * feat_dim,
+                                   dtype=torch.float).reshape(n, feat_dim)
+        self.targets = torch.arange(n * target_dim,
+                                    dtype=torch.float).reshape(n, target_dim)
 
     def __len__(self):
         return len(self.inputs)
@@ -40,8 +40,8 @@ class _InputOnlyDataset(Dataset):
     """Dataset that contains only inputs (no targets)."""
 
     def __init__(self, n=10, feat_dim=4):
-        self.inputs = torch.arange(n * feat_dim, dtype=torch.float).reshape(
-            n, feat_dim)
+        self.inputs = torch.arange(n * feat_dim,
+                                   dtype=torch.float).reshape(n, feat_dim)
 
     def __len__(self):
         return len(self.inputs)
@@ -62,8 +62,9 @@ class _SimpleNet(NeuralNet):
 
 
 # ---------------------------------------------------------------------------
-# DataAdapter 
+# DataAdapter
 # ---------------------------------------------------------------------------
+
 
 def test_data_adapter_extract_feats():
     adapter = _DoubleAdapter()
@@ -75,6 +76,7 @@ def test_data_adapter_extract_feats():
 # ---------------------------------------------------------------------------
 # NeuralNetDataset save / load
 # ---------------------------------------------------------------------------
+
 
 def test_neural_net_dataset_save_load_adapted():
     items = [torch.tensor([float(i)]) for i in range(5)]
@@ -102,10 +104,11 @@ def test_neural_net_dataset_save_load_not_adapted():
 # preprocess_dataset
 # ---------------------------------------------------------------------------
 
+
 def test_preprocess_dataset_with_targets():
     net = _SimpleNet(data_adapter=_DoubleAdapter())
     raw_ds = _SimpleDataset(n=5)
-    adapted_ds = net.preprocess_dataset(raw_ds, no_targets=False)
+    adapted_ds = net.wrap_in_adapter(raw_ds, no_targets=False)
 
     assert adapted_ds.adapted is True
     assert len(adapted_ds) == 5
@@ -120,7 +123,7 @@ def test_preprocess_dataset_with_targets():
 def test_preprocess_dataset_no_targets():
     net = _SimpleNet(data_adapter=_DoubleAdapter())
     raw_ds = _InputOnlyDataset(n=5)
-    adapted_ds = net.preprocess_dataset(raw_ds, no_targets=True)
+    adapted_ds = net.wrap_in_adapter(raw_ds, no_targets=True)
 
     assert adapted_ds.adapted is True
     assert len(adapted_ds) == 5
@@ -135,12 +138,13 @@ def test_preprocess_dataset_raises_without_adapter():
     net = _SimpleNet()  # no data_adapter
     raw_ds = _SimpleDataset(n=5)
     with pytest.raises(AssertionError):
-        net.preprocess_dataset(raw_ds)
+        net.wrap_in_adapter(raw_ds)
 
 
 # ---------------------------------------------------------------------------
 # load_or_create_preprocessed_dataset
 # ---------------------------------------------------------------------------
+
 
 def test_load_or_create_preprocessed_dataset_creates_and_loads():
     net = _SimpleNet(data_adapter=_DoubleAdapter())
@@ -192,6 +196,7 @@ def test_load_or_create_preprocessed_dataset_no_len_raises():
     net = _SimpleNet(data_adapter=_DoubleAdapter())
 
     class _NoLenDataset:
+
         def __getitem__(self, idx):
             return torch.zeros(4)
 
@@ -204,6 +209,7 @@ def test_load_or_create_preprocessed_dataset_no_len_raises():
 # ---------------------------------------------------------------------------
 # make_data_loader: auto-applies extraction when not adapted
 # ---------------------------------------------------------------------------
+
 
 def test_make_data_loader_applies_adapter_when_not_adapted():
     net = _SimpleNet(data_adapter=_DoubleAdapter())
@@ -221,7 +227,7 @@ def test_make_data_loader_applies_adapter_when_not_adapted():
 def test_make_data_loader_skips_adapter_when_adapted():
     net = _SimpleNet(data_adapter=_DoubleAdapter())
     raw_ds = _SimpleDataset(n=8)
-    adapted_ds = net.preprocess_dataset(raw_ds, no_targets=False)
+    adapted_ds = net.wrap_in_adapter(raw_ds, no_targets=False)
 
     loader = net.make_data_loader(adapted_ds, batch_size=8, shuffle=False)
     batch = next(iter(loader))

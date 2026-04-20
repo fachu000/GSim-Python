@@ -524,7 +524,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         if unnormalized and self.normalizer is not None:
             f_loss = self.make_unnormalized_loss(f_loss)
 
-        dataloader = self.make_data_loader(dataset, batch_size, no_targets=no_targets)
+        dataloader = self.make_data_loader(dataset,
+                                           batch_size,
+                                           no_targets=no_targets)
         self.eval()
         loss, hci = self._eval_static_metric(dataloader,
                                              f_loss=f_loss,
@@ -548,8 +550,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         def save(self, path: str):
             with open(path, "wb") as f:
-                pickle.dump({"l_items": self.l_items, "adapted": self.adapted},
-                            f)
+                pickle.dump({
+                    "l_items": self.l_items,
+                    "adapted": self.adapted
+                }, f)
 
         @classmethod
         def load(cls, path: str) -> 'NeuralNet.NeuralNetDataset':
@@ -557,8 +561,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 d = pickle.load(f)
             return cls(l_items=d["l_items"], adapted=d["adapted"])
 
-    def preprocess_dataset(self, dataset: Dataset,
-                           no_targets: bool = False) -> Dataset:
+    def wrap_in_adapter(self,
+                        dataset: Dataset,
+                        no_targets: bool = False) -> Dataset:
         """Return a lazy wrapper dataset that applies data_adapter.extract_feats
         to each input.
 
@@ -573,10 +578,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         """
         assert self.data_adapter is not None, \
             "preprocess_dataset requires data_adapter to be set."
-            
+
         assert getattr(dataset, "adapted", False) is False, \
             "Dataset is already adapted."
-            
+
         adapter = self.data_adapter
 
         class _AdaptedDataset(Dataset):
@@ -616,8 +621,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             A NeuralNetDataset with adapted=True.
         """
         if os.path.exists(path):
-            gsim_logger.info(
-                f"Loading preprocessed dataset from {path}")
+            gsim_logger.info(f"Loading preprocessed dataset from {path}")
             ds_out = NeuralNet.NeuralNetDataset.load(path)
             assert getattr(ds_out, "adapted", False) is True, \
                 "The loaded dataset is not adapted. This may be because `path` points to a file that was not created by `preprocess_dataset`. To fix this, delete the file at `path` and run again."
@@ -629,9 +633,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         assert hasattr(dataset, '__len__'), \
             ("Only datasets with a finite length can be preprocessed and saved to disk.")
 
-        gsim_logger.info(
-            f"Preprocessing dataset and saving to {path}...")
-        adapted = self.preprocess_dataset(dataset, no_targets=no_targets)
+        gsim_logger.info(f"Preprocessing dataset and saving to {path}...")
+        adapted = self.wrap_in_adapter(dataset, no_targets=no_targets)
         l_items = [adapted[i] for i in range(len(adapted))]  # type: ignore
         nn_dataset = NeuralNet.NeuralNetDataset(l_items, adapted=True)
         nn_dataset.save(path)
@@ -642,7 +645,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                             Dataset],
                 batch_size=32,
                 unnormalize=True,
-                dataset_includes_targets=False,
+                dataset_includes_targets=None,
                 output_class: None | type[torch.Tensor] | type[list]
                 | type[tuple] | type[Dataset] = None):
         """
@@ -655,17 +658,21 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 - A tensor of shape (N, ...).
 
                 - A tuple/list of length N. Note that, since each item is an
-                  input, it can be itself a tensor, a tuple, or a list.
+                  input, it can be itself a tensor, a tuple, or a list.                  
 
-                - A Dataset. 
-                    - If `dataset_includes_targets` is False, the Dataset
-                      contains N inputs, i.e., dataset[n] is the n-th input.
-                    - If `dataset_includes_targets` is True, the Dataset
-                      contains N pairs (input, target), i.e., dataset[n][0] is
-                      the n-th input. 
+                - A Dataset.                             
 
             `unnormalize`: if True, the outputs are unnormalized before being
             returned.
+            
+            `dataset_includes_targets`: 
+                - If `dataset_includes_targets` is False, the Dataset contains N
+                  inputs, i.e., dataset[n] is the n-th input.
+                - If `dataset_includes_targets` is True, the Dataset contains N
+                  pairs (input, target), i.e., dataset[n][0] is the n-th input.             
+                By default, `dataset_includes_targets` is set to False, since
+                this is the most common case for prediction. 
+                  
 
         Returns:
             The outputs in an object of class 'output_class'. If
@@ -719,11 +726,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         self._assert_initialized()
 
+        dataset_includes_targets = False if dataset_includes_targets is None else dataset_includes_targets
+
         if not unnormalize and self.normalizer is None:
             raise ValueError(
                 "Cannot return normalized outputs if a normalizer is not set.")
         if not isinstance(data, Dataset):
-            dataset_includes_targets = False
             dataset = NeuralNet.NeuralNetDataset(data)
         else:
             dataset = data
@@ -805,7 +813,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         """
         if self.data_adapter is not None and not getattr(
                 dataset, 'adapted', False):
-            dataset = self.preprocess_dataset(dataset, no_targets=no_targets)
+            dataset = self.wrap_in_adapter(dataset, no_targets=no_targets)
 
         # MPS requires 'fork' multiprocessing context to work with num_workers > 0
         # See: https://github.com/pytorch/pytorch/issues/87688
@@ -855,7 +863,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     def fit(self,
             dataset: Dataset,
             f_loss: LossFunType,
-            optimizer,            
+            optimizer,
             lr_scheduler: _LRScheduler | LRScheduler | None = None,
             no_targets=False,
             num_epochs=None,
@@ -1066,8 +1074,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 fit_dataset = dataset_train
                 if self.data_adapter is not None and not getattr(
                         dataset_train, 'adapted', False):
-                    fit_dataset = self.preprocess_dataset(dataset_train,
-                                                          no_targets=no_targets)
+                    fit_dataset = self.wrap_in_adapter(dataset_train,
+                                                       no_targets=no_targets)
                 self.normalizer.fit(fit_dataset)
                 self.normalizer.save()
             else:
@@ -1430,12 +1438,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             fit_normalizer_if_needed()
 
         # Instantiate the data loaders
-        dataloader_train = self.make_data_loader(dataset_train, batch_size,
-                                                 shuffle, no_targets=no_targets)
+        dataloader_train = self.make_data_loader(dataset_train,
+                                                 batch_size,
+                                                 shuffle,
+                                                 no_targets=no_targets)
         dataloader_train_eval = self.make_data_loader(dataset_train,
-                                                      batch_size_eval, shuffle, no_targets=no_targets)
-        dataloader_val = self.make_data_loader(dataset_val, batch_size,
-                                               shuffle, no_targets=no_targets) if val else None
+                                                      batch_size_eval,
+                                                      shuffle,
+                                                      no_targets=no_targets)
+        dataloader_val = self.make_data_loader(
+            dataset_val, batch_size, shuffle,
+            no_targets=no_targets) if val else None
 
         # History initialization
         hist = self.load_hist()
@@ -1505,7 +1518,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     break
 
         if restore_best_checkpoint and hist.l_step_inds_checkpoints:
-            gsim_logger.info("Restoring the best checkpoint at the end of training.")
+            gsim_logger.info(
+                "Restoring the best checkpoint at the end of training.")
             load_checkpoint()
 
         # Terminate the plotting process if running
@@ -1570,12 +1584,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         self._diagnoser = diagnoser
 
     def _move_to_device(self, obj: Union[torch.Tensor, list, tuple]):
+        non_blocking = self.device_type != "mps"
         if isinstance(obj, torch.Tensor):
             return obj.float().to(
-                self.device_type, non_blocking=self.device_type !=
-                "mps")  # bug https://github.com/pytorch/pytorch/issues/139550
+                self.device_type, non_blocking=non_blocking
+            )  # bug https://github.com/pytorch/pytorch/issues/139550
         elif isinstance(obj, (list, tuple)):
             return type(obj)(self._move_to_device(item) for item in obj)
+        elif hasattr(obj, "to_device"):
+            # For custom objects, implement a to_device method that moves all
+            # tensors inside the object to the device.
+            return obj.to_device(self.device_type, non_blocking=non_blocking)
         else:
             raise TypeError("Unsupported type.")
 
@@ -1587,6 +1606,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             )  # bug https://github.com/pytorch/pytorch/issues/139550
         elif isinstance(obj, (list, tuple)):
             return type(obj)(NeuralNet._move_to_cpu(item) for item in obj)
+        elif hasattr(obj, "to_device"):
+            # For custom objects, implement a to_device method that moves all
+            # tensors inside the object to the device.
+            return obj.to_device("cpu", non_blocking=False)
         else:
             raise TypeError("Unsupported type.")
 
@@ -1657,7 +1680,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         return l_sessions
 
     @staticmethod
-    def plot_training_history(hist: TrainingHistory, first_step_to_plot=0, logx=False, logy=False):
+    def plot_training_history(hist: TrainingHistory,
+                              first_step_to_plot=0,
+                              logx=False,
+                              logy=False):
         """
         Plots the training history of a neural network.
 
@@ -1809,10 +1835,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     max_x_value = max(max_x_value, l_x[-1])
             if max_y_value != -np.inf and min_y_value != np.inf:
                 margin = margin_coef * (max_y_value - min_y_value)
-                if not logy: # not implemented for logy == True
+                if not logy:  # not implemented for logy == True
                     s1.ylim = (min_y_value - margin, max_y_value + margin)
             if max_x_value != -np.inf:
-                if not logx: # not implemented for logx == True
+                if not logx:  # not implemented for logx == True
                     s1.xlim = (first_step_to_plot, max_x_value)
             return s1
 
@@ -1848,7 +1874,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
             s1 = plot_keys(["l_train_loss_me", "l_train_loss", "l_val_loss"])
             plot_restored_checkpoints_and_session_starts(s1, hist)
-            s2 = Subplot(xlabel="Step", ylabel="Learning rate", sharex=True, logx=logx, logy=logy)
+            s2 = Subplot(xlabel="Step",
+                         ylabel="Learning rate",
+                         sharex=True,
+                         logx=logx,
+                         logy=logy)
             s2.xlim = s1.xlim
             s2.add_curve(yaxis=hist.l_lr if len(hist.l_lr) > 0 else [np.nan])
             G = GFigure()
