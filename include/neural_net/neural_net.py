@@ -1914,8 +1914,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             s2 = Subplot(xlabel="Step",
                          ylabel="Learning rate",
                          sharex=True,
-                         logx=logx,
-                         logy=logy)
+                         logx=logx)
             s2.xlim = s1.xlim
             s2.add_curve(yaxis=hist.l_lr if len(hist.l_lr) > 0 else [np.nan])
             G = GFigure()
