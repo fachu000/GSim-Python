@@ -18,7 +18,7 @@ from tqdm import tqdm
 import gsim
 from gsim.gfigure import GFigure
 from gsim.include.neural_net import NeuralNet, WarmupCosineMinLRScheduler
-from gsim.include.neural_net.data_adapter import DataAdapter
+from gsim.include.neural_net.data_adapter import AdaptationSpec, DataAdapter
 from gsim.include.neural_net.normalizers import (
     MultiFeatNormalizer,
     StdFeatNormalizer,
@@ -355,8 +355,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
 
         def plot_data():
             preds = [
-                float(p[0]) for p in net.predict(test_dataset,
-                                                 no_targets=False)
+                float(p[0])
+                for p in net.predict(test_dataset, no_targets=False)
             ]
             feat = [float(data[0]) for data in test_dataset]
             true_target = [float(data[1]) for data in test_dataset]
@@ -490,7 +490,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
 
         return net.plot_training_history(d_training_history)
 
-    # Experiment illustrating DataAdapter.extract_feats.
+    # Experiment illustrating DataAdapter.adapt_input.
     #
     # Scenario: the raw dataset contains 1-D signals (time series). Feature
     # extraction is performed by SignalAdapter, which computes the mean and
@@ -500,10 +500,10 @@ class ExperimentSet(gsim.AbstractExperimentSet):
     #
     # The experiment highlights two usage modes:
     #   (a) On-the-fly extraction: pass the raw dataset directly to fit().
-    #       NeuralNet applies extract_feats automatically in the data loader.
+    #       NeuralNet applies adapt_input automatically in the data loader.
     #   (b) Pre-computed extraction: call load_or_create_preprocessed_dataset()
     #       to materialise and cache the feature vectors on disk, then pass the
-    #       cached dataset to fit().  Useful when extract_feats is expensive.
+    #       cached dataset to fit().  Useful when adapt_input is expensive.
     def experiment_1006(l_args):
 
         # ------------------------------------------------------------------
@@ -518,12 +518,11 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                 rng.manual_seed(seed)
                 t = torch.linspace(0, 2 * np.pi, 50)
                 # Random amplitude in [1, 5]
-                amplitudes = 1 + 4 * torch.rand(num_examples, 1,
-                                                 generator=rng)
+                amplitudes = 1 + 4 * torch.rand(num_examples, 1, generator=rng)
                 signals = amplitudes * torch.sin(t).unsqueeze(0)
                 signals += 0.2 * torch.randn(num_examples, 50, generator=rng)
-                self.signals = signals       # (N, 50)
-                self.targets = amplitudes    # (N, 1)
+                self.signals = signals  # (N, 50)
+                self.targets = amplitudes  # (N, 1)
 
             def __len__(self):
                 return len(self.signals)
@@ -536,7 +535,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         # ------------------------------------------------------------------
         class SignalAdapter(DataAdapter):
 
-            def extract_feats(self, signal: torch.Tensor) -> torch.Tensor:
+            def adapt_input(self, signal: torch.Tensor, spec) -> torch.Tensor:
                 """Return [mean, std] of the signal — shape (2,)."""
                 return torch.stack([signal.mean(), signal.std()])
 
@@ -566,7 +565,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         # ------------------------------------------------------------------
         # Mode (a): on-the-fly extraction.
         # The adapter is set on the network; make_data_loader and
-        # fit_normalizer_if_needed apply extract_feats automatically.
+        # fit_normalizer_if_needed apply adapt_input automatically.
         # ------------------------------------------------------------------
         print("Mode (a): on-the-fly feature extraction")
         net_a = SignalNet(data_adapter=SignalAdapter(), normalizer="both")
@@ -599,8 +598,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             path=os.path.join(cache_dir, "val_adapted.pk"),
         )
 
-        # The adapted datasets already have adapted=True, so extract_feats
-        # will not be applied again by make_data_loader.
+        # The adapted datasets already have preprocessed=True, so the adapter
+        # will receive spec.input_already_preprocessed=True.
         hist_b = net_b.fit(
             adapted_train,
             f_loss,
@@ -621,7 +620,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             path=os.path.join(cache_dir, "train_adapted.pk"),
         )
         # File already exists from above, so RawSignalDataset is never built.
-        assert adapted_train2.adapted is True
+        assert adapted_train2.preprocessed is True
 
         # ------------------------------------------------------------------
         # Plot training curves for both modes
@@ -717,3 +716,153 @@ class ExperimentSet(gsim.AbstractExperimentSet):
 
         return net.plot_training_history(d_training_history)
 
+    # Experiment illustrating self-supervised learning via DataAdapter.
+    #
+    # Scenario: clean 1-D sinusoidal signals are stored without labels.  A
+    # DenoisingAdapter synthesises (noisy, clean) training pairs on the fly
+    # inside adapt_input, so the raw dataset can be declared no_targets=True
+    # and fit() requires no changes.  At inference the adapter skips pair
+    # formation and the network denoises user-supplied noisy signals.
+    #
+    # Key DataAdapter API illustrated:
+    #   - adapt_input   : synthesises pairs at training time, identity at inference
+    #   - get_no_targets: returns False during training so collate_fn sees
+    #                     (inputs, targets); returns True at inference
+    def experiment_1008(l_args):
+
+        noise_std = 0.5
+        signal_len = 50
+        n_train = 2000
+        n_val = 500
+
+        # ------------------------------------------------------------------
+        # Raw dataset: clean sinusoids, NO targets.
+        # Each item is a Tensor of shape (signal_len,).
+        # ------------------------------------------------------------------
+        class CleanSignalDataset(Dataset):
+
+            def __init__(self, n, seed=0):
+                rng = torch.Generator()
+                rng.manual_seed(seed)
+                t = torch.linspace(0, 2 * np.pi, signal_len)
+                amplitudes = 1 + 3 * torch.rand(n, generator=rng)
+                freqs = 1 + 2 * torch.rand(n, generator=rng)
+                self.signals = amplitudes.unsqueeze(1) * torch.sin(
+                    freqs.unsqueeze(1) * t.unsqueeze(0))  # (n, signal_len)
+
+            def __len__(self):
+                return len(self.signals)
+
+            def __getitem__(self, idx):
+                return self.signals[idx]  # plain tensor, no target
+
+        # ------------------------------------------------------------------
+        # DenoisingAdapter: synthesises (noisy, clean) pairs at training time.
+        # ------------------------------------------------------------------
+        class DenoisingAdapter(DataAdapter):
+
+            def adapt_input(self, signal, spec: AdaptationSpec):
+                if spec.inference or spec.preprocess_only:
+                    # At inference the caller supplies the noisy signal; at
+                    # preprocess time we cache clean signals (noise is
+                    # stochastic and must not be frozen).
+                    return signal
+                # Training / evaluation: add noise and form a supervised pair.
+                noise = noise_std * torch.randn_like(signal)
+                return signal + noise, signal  # (noisy, clean)
+
+            def get_no_targets(self, inner_dataset_has_no_targets, spec):
+                # The adapted dataset has targets during training/eval but
+                # not at inference or preprocess time.
+                if spec.inference or spec.preprocess_only:
+                    return True
+                return False
+
+        # ------------------------------------------------------------------
+        # Network: MLP 50 -> 128 -> 128 -> 50.
+        # ------------------------------------------------------------------
+        class DenoisingNet(NeuralNet):
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.fc1 = nn.Linear(signal_len, 128)
+                self.fc2 = nn.Linear(128, 128)
+                self.fc3 = nn.Linear(128, signal_len)
+                self.initialize()
+
+            def forward(self, x):
+                x = torch.relu(self.fc1(x))
+                x = torch.relu(self.fc2(x))
+                return self.fc3(x)
+
+        f_loss = lambda pred, clean: (pred - clean).pow(2).mean(dim=1)
+
+        torch.manual_seed(0)
+        np.random.seed(0)
+
+        dataset_train = CleanSignalDataset(n_train, seed=0)
+        dataset_val = CleanSignalDataset(n_val, seed=1)
+
+        # ------------------------------------------------------------------
+        # Training.  fit() is called with no_targets=True because the raw
+        # dataset has no labels.  DenoisingAdapter.adapt_input synthesises
+        # pairs on the fly; get_no_targets signals this to the pipeline.
+        # ------------------------------------------------------------------
+        net = DenoisingNet(data_adapter=DenoisingAdapter(), normalizer="both")
+        hist = net.fit(
+            dataset_train,
+            f_loss,
+            optimizer=torch.optim.Adam(net.parameters(), lr=1e-3),
+            dataset_val=dataset_val,
+            num_epochs=30,
+            batch_size=64,
+            no_targets=True,
+        )
+
+        # ------------------------------------------------------------------
+        # Inference.  Supply noisy signals directly; adapt_input returns them
+        # unchanged (spec.inference=True) and the network denoises them.
+        # ------------------------------------------------------------------
+        rng_inf = torch.Generator()
+        rng_inf.manual_seed(42)
+        clean_test = dataset_val[0]  # shape (50,)
+        noisy_test = clean_test + noise_std * torch.randn(signal_len,
+                                                          generator=rng_inf)
+
+        recon = net.predict(noisy_test.unsqueeze(0),
+                            output_class=torch.Tensor).squeeze(0)
+
+        mse_noisy = (noisy_test - clean_test).pow(2).mean().item()
+        mse_recon = (recon.cpu() - clean_test).pow(2).mean().item()
+        print(f"MSE (noisy input vs clean): {mse_noisy:.4f}")
+        print(f"MSE (reconstruction vs clean): {mse_recon:.4f}")
+        assert mse_recon < mse_noisy, \
+            "Reconstruction should be closer to clean than the noisy input."
+
+        # ------------------------------------------------------------------
+        # Plots
+        # ------------------------------------------------------------------
+        l_G = net.plot_training_history(hist)
+        if l_G:
+            l_G[0].l_subplots[0].title = "Self-supervised denoising — training"
+
+        t = np.linspace(0, 2 * np.pi, signal_len)
+        G_signals = GFigure(
+            xaxis=t,
+            yaxis=clean_test.numpy(),
+            legend="clean",
+            styles="-",
+            xlabel="t",
+            ylabel="amplitude",
+            title="Denoising: clean / noisy / reconstruction",
+        )
+        G_signals.add_curve(xaxis=t,
+                            yaxis=noisy_test.numpy(),
+                            legend="noisy",
+                            styles="--")
+        G_signals.add_curve(xaxis=t,
+                            yaxis=recon.detach().numpy(),
+                            legend="reconstruction",
+                            styles="-.")
+
+        return l_G + [G_signals]
