@@ -566,6 +566,30 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 d = pickle.load(f)
             return cls(l_items=d["l_items"], preprocessed=d["preprocessed"])
 
+    class AdaptedDataset(Dataset):
+
+        def __init__(self, inner, adapter: DataAdapter, spec: AdaptationSpec,
+                     inner_dataset_has_no_targets: bool):
+            self._inner = inner
+            self._adapter = adapter
+            self.adaptation_spec = spec
+            self._inner_dataset_has_no_targets = \
+                inner_dataset_has_no_targets
+
+        def __len__(self):
+            return len(self._inner)  # type: ignore
+
+        @property
+        def no_targets(self) -> bool:
+            return self._adapter.get_no_targets(
+                self._inner_dataset_has_no_targets, self.adaptation_spec)
+
+        def __getitem__(self, idx):
+            item = self._inner[idx]
+            if self._inner_dataset_has_no_targets:
+                return self._adapter.adapt_input(item, self.adaptation_spec)
+            return self._adapter.adapt_dataset_item(item, self.adaptation_spec)
+
     def wrap_in_adapter(self,
                         dataset: Dataset,
                         preprocess_only: bool = False,
@@ -594,31 +618,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             inference=inference,
         )
 
-        class _AdaptedDataset(Dataset):
-
-            def __init__(self, inner, adapter, spec,
-                         inner_dataset_has_no_targets):
-                self._inner = inner
-                self._adapter = adapter
-                self._spec = spec
-                self._inner_dataset_has_no_targets = \
-                    inner_dataset_has_no_targets
-
-            def __len__(self):
-                return len(self._inner)  # type: ignore
-
-            @property
-            def no_targets(self) -> bool:
-                return self._adapter.get_no_targets(
-                    self._inner_dataset_has_no_targets, self._spec)
-
-            def __getitem__(self, idx):
-                item = self._inner[idx]
-                if self._inner_dataset_has_no_targets:
-                    return self._adapter.adapt_input(item, self._spec)
-                return self._adapter.adapt_dataset_item(item, self._spec)
-
-        return _AdaptedDataset(dataset, self.data_adapter, spec, no_targets)
+        return NeuralNet.AdaptedDataset(dataset, self.data_adapter, spec,
+                                        no_targets)
 
     def load_or_create_preprocessed_dataset(
             self,
