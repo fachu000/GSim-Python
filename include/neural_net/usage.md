@@ -120,9 +120,9 @@ For this reason, these methods are given the following an object of class
   `load_or_create_preprocessed_dataset`. In self-supervised learning, this flag
   can be used to know whether to form input-target pairs or not.
 
-# Special cases
+## Special cases
 
-## Self-supervised learning
+### Self-supervised learning
 
 In self-supervised learning, one would like to create input-target pairs on the
 fly from the raw input data. By "on the fly" we mean that the input-target pairs
@@ -135,7 +135,13 @@ whenever `AdaptationSpec.preprocess_only=False` and
 correctly downstream, override `DataAdapter.get_no_targets` to return False in
 this case as well. 
 
+# Subclassing NeuralNet
 
+- Everything will work more smoothly if `forward` takes a single argument. This
+  is because `predict` expects that an input is a single object. If multiple
+  inputs are needed, they can be packed into a single object that implements the
+  `to_device` method. This method will be invoked by `NeuralNet` before each
+  forward pass. 
 
 
 

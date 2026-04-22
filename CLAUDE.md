@@ -30,6 +30,7 @@ When installed as a submodule in a parent repo, experiments are run from the par
 python run_experiment.py <experiment_id>          # run and store figures
 python run_experiment.py -p <experiment_id>       # plot stored figures only
 python run_experiment.py -e <experiment_id>       # export PDF
+python run_experiment.py -n <experiment_id>       # run without plotting (useful for agents)
 python run_experiment.py -x <module> <id>         # select experiment module
 python run_experiment.py -g <gpu_id> <id>         # select GPU
 ```

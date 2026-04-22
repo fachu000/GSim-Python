@@ -29,7 +29,8 @@ class AbstractExperimentSet:
                        experiment_id,
                        l_args=[],
                        save_pdf=False,
-                       inspect=False):
+                       inspect=False,
+                       no_plot=False):
         """ Executes the experiment function with identifier <ind_experiment>
 
         Args:
@@ -75,10 +76,15 @@ class AbstractExperimentSet:
                 gsim_logger.info("The experiment returned no GFigures.")
             else:
                 cls._store_fig(l_G, experiment_id)
-                cls._plot_list_of_GFigure(l_G,
-                                          save_pdf=save_pdf,
-                                          experiment_id=experiment_id,
-                                          inspect=inspect)
+                if no_plot:
+                    gsim_logger.info(
+                        "Skipping plotting because `no_plot` is True."
+                    )
+                else:
+                    cls._plot_list_of_GFigure(l_G,
+                                              save_pdf=save_pdf,
+                                              experiment_id=experiment_id,
+                                              inspect=inspect)
 
         else:
             gsim_logger.error(

@@ -114,6 +114,13 @@ if __name__ == '__main__':
 
     parser.add_argument('-g', '--gpu', help='Select the GPU.', default=None)
 
+    parser.add_argument(
+        '-n',
+        '--no_plot',
+        help=
+        'run the experiment and store its figures without displaying them (useful for non-interactive / agent invocations that would otherwise block on plt.show()).',
+        action="store_true")
+
     args, unknown_args = parser.parse_known_args()
     ExperimentSet = load_modules(args.xmod)
     if len(unknown_args):
@@ -142,7 +149,8 @@ if __name__ == '__main__':
         ExperimentSet.run_experiment(experiment_index,
                                      args.experiment_args,
                                      save_pdf=args.export,
-                                     inspect=args.inspect)
+                                     inspect=args.inspect,
+                                     no_plot=args.no_plot)
 
     def set_permisions_recursively(folder):
         for root, dirs, files in os.walk(folder):
