@@ -873,3 +873,112 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                             styles="-.")
 
         return l_G + [G_signals]
+
+    # Experiment illustrating training with an IterableDataset (no __len__).
+    #
+    # Key differences from finite-dataset training:
+    #   - num_steps is required (num_epochs cannot be used).
+    #   - val_split must be None (default); a separate dataset_val is provided.
+    #   - static_max_num_examples bounds each static-metric evaluation pass,
+    #     because the training stream has no natural stopping point.
+    def experiment_1009(l_args):
+        """Fit a small MLP to y = sin(2*pi*x) via an infinite data generator.
+
+        The training IterableDataset generates fresh (x, y+noise) pairs on
+        every iteration, so there is no epoch and no dataset length. Training
+        uses num_steps=3000; validation loss is evaluated on a fixed finite set
+        every 300 steps, capped at static_max_num_examples=200 examples.
+
+        Returns two figures:
+            1. Training curves (moving train loss and val loss vs. step).
+            2. True function vs. MLP estimate over [-1, 1].
+        """
+        from torch.utils.data import IterableDataset as _IterableDataset
+
+        def target_fn(x: np.ndarray) -> np.ndarray:
+            return np.sin(2 * np.pi * x)
+
+        class SineStream(_IterableDataset):
+            """Infinite stream of (x, sin(2*pi*x) + noise) pairs."""
+
+            def __iter__(self):
+                rng = np.random.default_rng()
+                while True:
+                    x = np.float32(rng.uniform(-1.0, 1.0))
+                    y = np.float32(target_fn(x) + 0.1 * rng.standard_normal())
+                    yield (torch.tensor([x]), torch.tensor([y]))
+
+        class SineDataset(Dataset):
+            """Fixed finite validation set."""
+
+            def __init__(self, n: int, seed: int = 0):
+                rng = np.random.default_rng(seed)
+                x = rng.uniform(-1.0, 1.0, n).astype(np.float32)
+                y = (target_fn(x) + 0.1 *
+                     rng.standard_normal(n)).astype(np.float32)
+                self.x = torch.from_numpy(x[:, None])
+                self.y = torch.from_numpy(y[:, None])
+
+            def __len__(self):
+                return len(self.x)
+
+            def __getitem__(self, idx):
+                return self.x[idx], self.y[idx]
+
+        class MLP(NeuralNet):
+
+            def __init__(self):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(1, 64), nn.Tanh(),
+                    nn.Linear(64, 64), nn.Tanh(),
+                    nn.Linear(64, 1),
+                )
+                self.initialize()
+
+            def forward(self, x: torch.Tensor) -> torch.Tensor:
+                return self.net(x)
+
+        torch.manual_seed(0)
+        np.random.seed(0)
+
+        dataset_train = SineStream()
+        dataset_val = SineDataset(n=200, seed=1)
+
+        net = MLP()
+        f_loss = lambda pred, tgt: ((pred - tgt) ** 2).squeeze(-1)
+        optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
+
+        num_steps = 3000
+        hist = net.fit(
+            dataset_train,
+            f_loss,
+            optimizer,
+            dataset_val=dataset_val,       # val_split must be None (default) for IterableDataset
+            num_steps=num_steps,
+            batch_size=32,
+            num_steps_eval_static=300,
+            num_steps_report_moving=150,
+            static_max_num_examples=200,   # cap each eval pass at 200 examples
+            checkpoint_criterion='never',
+            restore_best_checkpoint=False,
+        )
+
+        l_G = NeuralNet.plot_training_history(hist, logx=False, logy=True)
+
+        x_plot = np.linspace(-1, 1, 500).astype(np.float32)
+        y_true = target_fn(x_plot)
+        y_est = net.predict(
+            torch.from_numpy(x_plot[:, None]),
+            output_class=torch.Tensor,
+        ).numpy().ravel()
+
+        G2 = GFigure(
+            xlabel="x",
+            ylabel="y",
+            title="True vs. estimated function (IterableDataset training)",
+            xaxis=x_plot,
+            yaxis=[y_true, y_est],
+            legend=["sin(2πx)", "MLP estimate"],
+        )
+        return l_G + [G2]

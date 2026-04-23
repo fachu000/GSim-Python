@@ -465,17 +465,24 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         dataloader,
         f_loss: LossFunType,
         max_hci=None,
+        max_num_examples=None,
         alpha: float = 0.05,
     ):
         """
         Averages f_loss across the dataset.
 
-        Args: 
+        Args:
 
             `f_loss`: LossFunType
 
             `max_hci`: if not None, the computation stops when the half-width of
-            the confidence interval (CI) is below this threshold. 
+            the confidence interval (CI) is below this threshold.
+
+            `max_num_examples`: if not None, the computation stops after this
+            many examples have been processed. If the dataset has a length, this
+            is clamped to that length. If both `max_num_examples` and `max_hci`
+            are None after resolution (i.e. the dataset has no length and neither
+            argument is provided), a ValueError is raised.
 
             `alpha`: significance level for the CI (e.g. 0.05 for 95% CI)
 
@@ -483,25 +490,45 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `metric`: the estimated value of the metric.
 
             `hci`: half-width of the confidence interval (CI) for the metric.
-        
+
         """
+        dataset = dataloader.dataset
+        if isinstance(dataset, Sized):
+            n = len(dataset)
+            if max_num_examples is None:
+                max_num_examples = n
+            else:
+                max_num_examples = min(max_num_examples, n)
+
+        if max_num_examples is None and max_hci is None:
+            raise ValueError(
+                "_eval_static_metric requires either a dataset with length, "
+                "max_num_examples, or max_hci.")
 
         l_loss_vals = []
-        for ind_data, data in enumerate(dataloader):
+        num_batches = 0
+        data_iter = iter(dataloader)
+        while True:
+            if max_num_examples is not None and len(
+                    l_loss_vals) >= max_num_examples:
+                break
+            try:
+                data = next(data_iter)
+            except StopIteration:
+                break
+            num_batches += 1
 
             with torch.no_grad():
-                # Forward pass
                 loss = self._get_loss(data,
                                       f_loss)  # vector of length batch_size
 
             l_loss_vals += loss.detach().cpu().numpy().tolist()
 
-            # Stop if enough examples have been processed
             if max_hci is not None and len(l_loss_vals) >= 2:
                 mean, hci = mean_and_ci(l_loss_vals, alpha=alpha)
                 if hci <= max_hci:
                     gsim_logger.info(
-                        f"    Target accuracy reached during metric evaluation after {ind_data+1} out of {len(dataloader)} batches (used {len(l_loss_vals)} examples)."
+                        f"    Target accuracy reached during metric evaluation after {num_batches} batches (used {len(l_loss_vals)} examples)."
                     )
                     return mean, hci
 
@@ -513,7 +540,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             mean, hci = mean_and_ci(l_loss_vals, alpha=alpha)
             if max_hci is not None:
                 gsim_logger.info(
-                    f"    Target accuracy not reached during metric evaluation (used all {len(dataloader)} batches, {len(l_loss_vals)} examples)."
+                    f"    Target accuracy not reached during metric evaluation (used {num_batches} batches, {len(l_loss_vals)} examples)."
                 )
             return mean, hci
 
@@ -523,7 +550,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  f_loss: LossFunType,
                  no_targets=False,
                  unnormalized=True,
-                 max_hci=None):
+                 max_hci=None,
+                 max_num_examples=None):
         """
         Args:
 
@@ -533,6 +561,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
             `unnormalized`: If True, the unnormalized loss is returned. If no
             Normalizer is set, then the loss is already unnormalized.
+
+            `max_num_examples` (int | None): Maximum number of examples used to
+            estimate the loss. If the dataset has a length, this defaults to that
+            length (and is clamped to it if provided). For datasets without a
+            length, either `max_num_examples` or `max_hci` must be provided.
 
         Returns a dict with key-values:
 
@@ -555,7 +588,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         self.eval()
         loss, hci = self._eval_static_metric(dataloader,
                                              f_loss=f_loss,
-                                             max_hci=max_hci)
+                                             max_hci=max_hci,
+                                             max_num_examples=max_num_examples)
         return {"loss": loss, "hci": hci}
 
     class NeuralNetDataset(Dataset):
@@ -611,11 +645,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 return self._adapter.adapt_input(item, self.adaptation_spec)
             return self._adapter.adapt_dataset_item(item, self.adaptation_spec)
 
-    def wrap_in_adapter(self,
-                        dataset: Dataset,
-                        preprocess_only: bool = False,
-                        inference: bool = False,
-                        no_targets: bool = False) -> Dataset:
+    def wrap_in_adapter(
+            self,
+            dataset: Dataset,
+            preprocess_only: bool = False,
+            inference: bool = False,
+            no_targets: bool = False) -> 'NeuralNet.AdaptedDataset':
         """Return a lazy wrapper dataset that applies the data adapter to each
         item.
 
@@ -778,6 +813,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             dataset = NeuralNet.NeuralNetDataset(data)
         else:
             dataset = data
+            if not isinstance(dataset, Sized):
+                raise NotImplementedError(
+                    "predict does not support datasets without a length (e.g. IterableDataset)."
+                )
             if len(dataset) > 0:  # type: ignore
                 if not no_targets:
                     assert (len(dataset[0]) == 2)  # type: ignore
@@ -854,7 +893,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         torch.save({"weights": self.state_dict()}, path)
 
     def make_data_loader(self,
-                         dataset,
+                         dataset: Dataset,
                          batch_size,
                          shuffle=None,
                          no_targets=False,
@@ -872,6 +911,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             effective_no_targets = dataset.no_targets
         else:
             effective_no_targets = no_targets
+
+        # IterableDataset does not support shuffling inside DataLoader.
+        if not isinstance(dataset, Sized) and shuffle:
+            shuffle = False
 
         # MPS requires 'fork' multiprocessing context to work with num_workers > 0
         # See: https://github.com/pytorch/pytorch/issues/87688
@@ -927,7 +970,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             num_epochs=None,
             num_steps=None,
             dataset_val=None,
-            val_split=0.0,
+            val_split=None,
             batch_size=32,
             batch_size_eval=None,
             shuffle=True,
@@ -940,6 +983,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             restore_best_checkpoint=None,
             keep_best_val_weights=False,
             static_max_hci=None,
+            static_max_num_examples=None,
             eval_unnormalized_losses=False,
             unnormalized_max_hci=None,
             obtain_static_training_loss=False,
@@ -1010,8 +1054,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `dataset_val` (Dataset | None): The validation dataset. At most one
             of `val_split` and `dataset_val` can be provided.
 
-            `val_split` (float): Fraction of the training data to use for
-            validation. Default is 0.0.
+            `val_split` (float | None): Fraction of the training data to use for
+            validation. Default is None, which means validation is only
+            performed if `dataset_val` is provided. Must be None for datasets
+            without a length (e.g. IterableDataset).
 
             `batch_size` (int): Batch size for training. The default is 32.
 
@@ -1026,9 +1072,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `num_patience_evals` evaluations, training will be stopped.
 
             `num_steps_eval_static` (int | None): Number of steps between static
-            metric evaluations. A static metric evaluation means that the
-            network weights are the same across batches, i.e., there is no
-            gradient noise. 
+            metric evaluations. Here, "static" means that the network weights
+            are the same across batches, i.e., there is no gradient noise. The
+            validation loss is an example of a static metric. 
 
             `num_steps_report_moving` (int | None): Every this many steps, the
             moving estimate of the training loss is logged and stored. This
@@ -1084,6 +1130,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             is below this threshold, the metric evaluation stops early, which
             saves computation time.
 
+            `static_max_num_examples` (int | None): Maximum number of examples
+            used for static metric evaluations (static training loss, validation
+            loss, and unnormalized variants). Defaults to the dataset length
+            when the dataset is finite. For datasets without a length, either
+            this or `static_max_hci` must be provided.
+
             `eval_unnormalized_losses` (bool): Whether to evaluate unnormalized
             losses. Default is False.
 
@@ -1111,21 +1163,23 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             TrainingHistory: An object containing the training history.
         """
 
-        def make_validation_data(dataset: Dataset, dataset_val, val_split):
-            assert val_split == 0.0 or dataset_val is None
-            if dataset_val is None:
-                # The data is deterministically split into training and validation
-                # sets so that we can resume training.
-                assert isinstance(dataset, Sized)
+        def make_validation_data(dataset: Dataset, dataset_val,
+                                 val_split) -> tuple[Dataset, Dataset | None]:
+            assert val_split is None or dataset_val is None, \
+                "At most one of val_split and dataset_val can be provided."
+            if val_split is None:
+                dataset_train = dataset
+            else:
+                # Deterministically split into training and validation sets so
+                # that the partition if the same if training is resumed.
+                assert isinstance(dataset, Sized), \
+                    "val_split requires a dataset with length; use dataset_val instead."
                 num_examples_val = int(val_split * len(dataset))
                 dataset_train = Subset(dataset,
                                        range(len(dataset) - num_examples_val))
                 dataset_val = Subset(
                     dataset,
                     range(len(dataset) - num_examples_val, len(dataset)))
-            else:
-                dataset_train = dataset
-                num_examples_val = len(dataset_val)
             return dataset_train, dataset_val
 
         def resolve_fit_schedule(checkpoint_criterion, val,
@@ -1361,17 +1415,21 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             if obtain_static_training_loss:
                 gsim_logger.info(
                     "│ Computing the static estimate of the training loss...")
-                m, hci = self._eval_static_metric(dataloader_train_eval,
-                                                  f_loss,
-                                                  max_hci=static_max_hci)
+                m, hci = self._eval_static_metric(
+                    dataloader_train_eval,
+                    f_loss,
+                    max_hci=static_max_hci,
+                    max_num_examples=static_max_num_examples)
                 hist.l_train_loss += [(ind_step, m)]
                 l_str_log.append("train loss = " +
                                  get_log_loss_str(hist.l_train_loss, hci))
             if dataloader_val:
                 gsim_logger.info("│ Computing the validation loss...")
-                m, hci = self._eval_static_metric(dataloader_val,
-                                                  f_loss,
-                                                  max_hci=static_max_hci)
+                m, hci = self._eval_static_metric(
+                    dataloader_val,
+                    f_loss,
+                    max_hci=static_max_hci,
+                    max_num_examples=static_max_num_examples)
                 hist.l_val_loss += [(ind_step, m)]
                 l_str_log.append("val loss = " +
                                  get_log_loss_str(hist.l_val_loss, hci))
@@ -1384,7 +1442,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 m, hci = self._eval_static_metric(
                     dataloader_train_eval,
                     self.make_unnormalized_loss(f_loss),
-                    max_hci=unnormalized_max_hci)
+                    max_hci=unnormalized_max_hci,
+                    max_num_examples=static_max_num_examples)
                 hist.l_unnormalized_train_loss += [(ind_step, m)]
                 l_str_log.append(
                     "unnormalized train loss = " +
@@ -1396,7 +1455,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 m, hci = self._eval_static_metric(
                     dataloader_val,
                     self.make_unnormalized_loss(f_loss),
-                    max_hci=unnormalized_max_hci)
+                    max_hci=unnormalized_max_hci,
+                    max_num_examples=static_max_num_examples)
                 hist.l_unnormalized_val_loss += [(ind_step, m)]
                 l_str_log.append(
                     "unnormalized val loss = " +
@@ -1556,18 +1616,26 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         self._assert_initialized()
         torch.cuda.empty_cache()
 
+        # Input checks for no-length datasets
+        dataset_has_length = isinstance(dataset, Sized)
+        if not dataset_has_length:
+            if val_split is not None:
+                raise ValueError(
+                    "val_split cannot be used with a dataset that has no length; "
+                    "use dataset_val instead.")
+
         # Validation data
         dataset_train, dataset_val = make_validation_data(
             dataset, dataset_val, val_split)
-        val = dataset_val is not None and len(dataset_val) > 0
+        val = dataset_val is not None and (not isinstance(dataset_val, Sized)
+                                           or len(dataset_val) > 0)
 
         # Input processing
         batch_size_eval = batch_size_eval if batch_size_eval else batch_size
-        try:
-            num_steps_per_epoch = int(np.ceil(len(dataset) /
-                                              batch_size))  # type: ignore
-        except TypeError:
-            num_steps_per_epoch = None
+        num_steps_per_epoch = int(np.ceil(len(dataset_train) /
+                                          batch_size)) if isinstance(
+                                              dataset_train, Sized) else None
+
         assert (num_epochs is None) ^ (num_steps is None), \
             "Exactly one of num_epochs and num_steps must be provided."
         if num_steps is None:

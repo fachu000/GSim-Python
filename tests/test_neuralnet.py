@@ -1,5 +1,6 @@
 import logging
 
+import numpy as np
 import pytest
 import torch
 import torch.nn as nn
@@ -617,3 +618,72 @@ class TestFitStepIntervals:
                        shuffle=False, restore_best_checkpoint=False)
         assert hist.l_val_loss == []
         assert len(hist.l_train_loss_me) > 0
+
+
+# Tests for iterable dataset support #########################################
+
+class TestIterableDatasetSupport:
+    """Tests for fit/evaluate/predict with datasets that have no length."""
+
+    BATCH_SIZE = 5
+    VAL_DATASET = _TinyDataset(size=10, seed=42)
+
+    def _net(self):
+        return _TrainableNet()
+
+    def _opt(self, net):
+        return torch.optim.Adam(net.parameters(), lr=1e-3)
+
+    def test_fit_num_epochs_with_iterable_raises(self):
+        """num_epochs + IterableDataset raises because epoch is undefined."""
+        net = self._net()
+        opt = self._opt(net)
+        with pytest.raises(AssertionError, match="no length"):
+            net.fit(_IterableDataset(), _mse, opt,
+                    num_epochs=2, batch_size=self.BATCH_SIZE,
+                    checkpoint_criterion='never',
+                    shuffle=False, restore_best_checkpoint=False)
+
+    def test_fit_val_split_with_iterable_raises(self):
+        """val_split != None + IterableDataset raises."""
+        net = self._net()
+        opt = self._opt(net)
+        with pytest.raises(ValueError, match="val_split"):
+            net.fit(_IterableDataset(), _mse, opt,
+                    num_steps=10, batch_size=self.BATCH_SIZE,
+                    val_split=0.2,
+                    checkpoint_criterion='never',
+                    shuffle=False, restore_best_checkpoint=False)
+
+    def test_fit_iterable_with_static_max_num_examples(self):
+        """IterableDataset + static_max_num_examples evaluates val loss."""
+        net = self._net()
+        opt = self._opt(net)
+        hist = net.fit(_IterableDataset(), _mse, opt,
+                       num_steps=10, batch_size=self.BATCH_SIZE,
+                       dataset_val=self.VAL_DATASET,
+                       checkpoint_criterion='never',
+                       num_steps_eval_static=5,
+                       static_max_num_examples=6,
+                       shuffle=False, restore_best_checkpoint=False)
+        assert len(hist.l_val_loss) > 0
+
+    def test_evaluate_iterable_with_max_num_examples(self):
+        """evaluate on IterableDataset with max_num_examples returns a finite loss."""
+        net = self._net()
+        result = net.evaluate(_IterableDataset(), batch_size=self.BATCH_SIZE,
+                              f_loss=_mse, max_num_examples=15)
+        assert np.isfinite(result["loss"])
+
+    def test_evaluate_iterable_without_limit_raises(self):
+        """evaluate on IterableDataset without max_num_examples or max_hci raises."""
+        net = self._net()
+        with pytest.raises(ValueError):
+            net.evaluate(_IterableDataset(), batch_size=self.BATCH_SIZE,
+                         f_loss=_mse)
+
+    def test_predict_iterable_raises(self):
+        """predict on an IterableDataset raises NotImplementedError."""
+        net = self._net()
+        with pytest.raises(NotImplementedError):
+            net.predict(_IterableDataset(), batch_size=self.BATCH_SIZE)
