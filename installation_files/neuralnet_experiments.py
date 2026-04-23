@@ -26,6 +26,9 @@ from gsim.include.neural_net.normalizers import (
     IdentityFeatNormalizer,
 )
 
+np.random.seed(0)
+torch.manual_seed(0)
+
 
 class ExperimentSet(gsim.AbstractExperimentSet):
 
@@ -57,7 +60,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             def forward(self, x):
                 return self.fc(x)
 
-        dataset = ExampleDataset(1000)
+        dataset = ExampleDataset(10000)
         net = ExampleNet()
 
         f_loss = lambda m_pred, m_targets: torch.mean(
@@ -68,13 +71,15 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             dataset,
             f_loss,
             optimizer,
-            val_split=0.2,
-            num_epochs=200,
+            val_split=0.4,
+            num_steps=1000,
             batch_size=200,
         )
         d_metrics = net.evaluate(dataset, batch_size=32, f_loss=f_loss)
         print(d_metrics)
-        return net.plot_training_history(training_history)
+        return net.plot_training_history(training_history,
+                                         logx=True,
+                                         logy=True)
 
     # Simple experiment to illustrate learning rate scheduler usage
     def experiment_1002(l_args):
@@ -118,7 +123,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         lr_scheduler = WarmupCosineMinLRScheduler(
             optimizer,
             warmup_steps=15,
-            total_steps=300,
+            total_steps=500,
             min_lr=1e-4,
         )
         d_training_history = net.fit(
@@ -127,12 +132,14 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             optimizer,
             lr_scheduler=lr_scheduler,
             val_split=0.2,
-            num_epochs=200,
+            num_steps=500,
             batch_size=200,
         )
         d_metrics = net.evaluate(dataset, batch_size=32, f_loss=f_loss)
         print(d_metrics)
-        return net.plot_training_history(d_training_history)
+        return net.plot_training_history(d_training_history,
+                                         logx=True,
+                                         logy=True)
 
     # WIP: set the parameters and target function properly.
     # Experiment that illustrates how to use normalization with NeuralNet
@@ -276,7 +283,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                 batch_size=200,
                 eval_unnormalized_losses=True,
                 num_steps_eval_static=302,
-                num_steps_eval_moving=305,
+                num_steps_report_moving=305,
             )
             d_net["metrics"] = net.evaluate(dataset,
                                             batch_size=32,
@@ -349,7 +356,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                            dataset_val=val_dataset,
                            num_steps=num_steps,
                            batch_size=200,
-                           num_steps_eval_moving=1,
+                           num_steps_report_moving=1,
                            num_steps_eval_static=1,
                            num_steps_checkpoint=20)
 
@@ -709,7 +716,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                                      batch_size=64,
                                      eval_unnormalized_losses=False,
                                      num_steps_eval_static=2000,
-                                     num_steps_eval_moving=128,
+                                     num_steps_report_moving=128,
                                      keep_best_val_weights=True,
                                      static_max_hci=0.01,
                                      live_plot=True)
