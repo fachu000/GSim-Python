@@ -1,6 +1,9 @@
+import logging
+
 import pytest
 import torch
-from torch.utils.data import Dataset
+import torch.nn as nn
+from torch.utils.data import Dataset, IterableDataset
 
 from gsim.include.neural_net import NeuralNet
 from gsim.include.neural_net.neural_net import TrainingHistory
@@ -297,3 +300,320 @@ def test_get_session_history_steps_empty_history():
     expected = []
 
     assert result == expected
+
+
+# Tests for resolve_fit_schedule (via fit) #####################################
+
+class _TrainableNet(NeuralNet):
+    """Minimal single-layer trainable network for fit tests."""
+
+    def __init__(self, nn_folder=None):
+        super().__init__(nn_folder=nn_folder)
+        self.linear = nn.Linear(4, 1)
+        self.initialize()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear(x)
+
+
+class _TinyDataset(Dataset):
+    """20 deterministic examples of (randn(4), randn(1)); 4 steps/epoch at batch_size=5."""
+
+    def __init__(self, size=20, seed=0):
+        g = torch.Generator().manual_seed(seed)
+        self.x = torch.randn(size, 4, generator=g)
+        self.y = torch.randn(size, 1, generator=g)
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+
+class _IterableDataset(IterableDataset):
+    """Infinite stream of (randn(4), randn(1)) pairs (no __len__)."""
+
+    def __iter__(self):
+        while True:
+            yield torch.randn(4), torch.randn(1)
+
+
+def _mse(output, target):
+    """Per-example MSE: shape (batch_size,)."""
+    return ((output - target) ** 2).squeeze(-1)
+
+
+class TestFitStepIntervals:
+    """End-to-end tests for resolve_fit_schedule logic inside NeuralNet.fit."""
+
+    BATCH_SIZE = 5
+    DATASET = _TinyDataset()          # 20 examples → num_steps_per_epoch = 4
+    VAL_DATASET = _TinyDataset(size=10, seed=42)
+
+    def _net(self, nn_folder=None):
+        return _TrainableNet(nn_folder=nn_folder)
+
+    def _opt(self, net):
+        return torch.optim.Adam(net.parameters(), lr=1e-3)
+
+    def _fit(self, net, dataset, **kwargs):
+        opt = self._opt(net)
+        kwargs.setdefault('num_steps', 12)
+        kwargs.setdefault('batch_size', self.BATCH_SIZE)
+        kwargs.setdefault('shuffle', False)
+        kwargs.setdefault('restore_best_checkpoint', False)
+        return net.fit(dataset, _mse, opt, **kwargs)
+
+    # train_loss_me branch =====================================================
+
+    def test_train_loss_me_defaults_from_report_moving(self):
+        """num_steps_checkpoint resolves from num_steps_report_moving=5."""
+        net = self._net()
+        hist = self._fit(net, self.DATASET,
+                         num_steps=15,
+                         checkpoint_criterion='train_loss_me',
+                         num_steps_report_moving=5)
+        steps = [s for s, _ in hist.l_train_loss_me]
+        assert steps == [5, 10]
+
+    def test_train_loss_me_defaults_from_per_epoch(self, tmp_path):
+        """num_steps_checkpoint resolves from num_steps_per_epoch=4 when nothing is set."""
+        net = self._net(nn_folder=str(tmp_path))
+        hist = self._fit(net, self.DATASET,
+                         num_steps=12,
+                         checkpoint_criterion='train_loss_me')
+        steps = [s for s, _ in hist.l_train_loss_me]
+        assert steps == [4, 8]
+
+    def test_train_loss_me_no_length_raises(self, tmp_path):
+        """IterableDataset with no num_steps_checkpoint or num_steps_report_moving raises."""
+        net = self._net(nn_folder=str(tmp_path))
+        opt = self._opt(net)
+        with pytest.raises(ValueError, match="dataset has no length"):
+            net.fit(_IterableDataset(), _mse, opt,
+                    num_steps=10, batch_size=self.BATCH_SIZE,
+                    dataset_val=self.VAL_DATASET,
+                    checkpoint_criterion='train_loss_me',
+                    shuffle=False, restore_best_checkpoint=False)
+
+    def test_train_loss_me_val_iterable_no_eval_static_warns(self, tmp_path, caplog):
+        """Warns and skips val loss when IterableDataset + val + no num_steps_eval_static."""
+        net = self._net(nn_folder=str(tmp_path))
+        opt = self._opt(net)
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            hist = net.fit(_IterableDataset(), _mse, opt,
+                           num_steps=10, batch_size=self.BATCH_SIZE,
+                           dataset_val=self.VAL_DATASET,
+                           checkpoint_criterion='train_loss_me',
+                           num_steps_checkpoint=5,
+                           shuffle=False, restore_best_checkpoint=False)
+        assert 'validation loss will not be computed' in caplog.text
+        assert hist.l_val_loss == []
+
+    def test_train_loss_me_report_moving_none_runs(self, tmp_path):
+        """With num_steps_report_moving=None, moving metric fires only on checkpoint steps."""
+        net = self._net(nn_folder=str(tmp_path))
+        hist = self._fit(net, self.DATASET,
+                         num_steps=12,
+                         checkpoint_criterion='train_loss_me',
+                         num_steps_checkpoint=4,
+                         num_steps_report_moving=None)
+        steps = [s for s, _ in hist.l_train_loss_me]
+        assert steps == [4, 8]
+
+    # val_loss branch ==========================================================
+
+    def test_val_loss_eval_static_copied_to_checkpoint(self, tmp_path):
+        """With only num_steps_eval_static=4, num_steps_checkpoint resolves to 4."""
+        net = self._net(nn_folder=str(tmp_path))
+        hist = self._fit(net, self.DATASET,
+                         num_steps=8,
+                         checkpoint_criterion='val_loss',
+                         dataset_val=self.VAL_DATASET,
+                         num_steps_eval_static=4)
+        val_steps = [s for s, _ in hist.l_val_loss]
+        assert val_steps == [0, 4]
+
+    def test_val_loss_checkpoint_copied_to_eval_static(self, tmp_path):
+        """With only num_steps_checkpoint=4, num_steps_eval_static resolves to 4."""
+        net = self._net(nn_folder=str(tmp_path))
+        hist = self._fit(net, self.DATASET,
+                         num_steps=8,
+                         checkpoint_criterion='val_loss',
+                         dataset_val=self.VAL_DATASET,
+                         num_steps_checkpoint=4)
+        val_steps = [s for s, _ in hist.l_val_loss]
+        assert val_steps == [0, 4]
+
+    def test_val_loss_neither_defaults_per_epoch(self, tmp_path):
+        """Both None: resolves to num_steps_per_epoch=4."""
+        net = self._net(nn_folder=str(tmp_path))
+        hist = self._fit(net, self.DATASET,
+                         num_steps=8,
+                         checkpoint_criterion='val_loss',
+                         dataset_val=self.VAL_DATASET)
+        val_steps = [s for s, _ in hist.l_val_loss]
+        assert val_steps == [0, 4]
+
+    def test_val_loss_no_length_raises(self, tmp_path):
+        """IterableDataset with both missing raises ValueError."""
+        net = self._net(nn_folder=str(tmp_path))
+        opt = self._opt(net)
+        with pytest.raises(ValueError, match="dataset has no length"):
+            net.fit(_IterableDataset(), _mse, opt,
+                    num_steps=10, batch_size=self.BATCH_SIZE,
+                    dataset_val=self.VAL_DATASET,
+                    checkpoint_criterion='val_loss',
+                    shuffle=False, restore_best_checkpoint=False)
+
+    def test_val_loss_multiple_warning(self, tmp_path, caplog):
+        """Non-multiple num_steps_checkpoint emits the 'multiple' warning."""
+        net = self._net(nn_folder=str(tmp_path))
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            self._fit(net, self.DATASET,
+                      num_steps=20,
+                      checkpoint_criterion='val_loss',
+                      dataset_val=self.VAL_DATASET,
+                      num_steps_checkpoint=10,
+                      num_steps_eval_static=3)
+        assert 'multiple' in caplog.text.lower()
+
+    # never branch =============================================================
+
+    def test_never_allows_all_none(self):
+        """criterion='never', IterableDataset, all None: runs without error.
+
+        dataset_val is passed explicitly so that make_validation_data does not
+        require the iterable dataset to be Sized.
+        """
+        net = self._net()
+        opt = self._opt(net)
+        hist = net.fit(_IterableDataset(), _mse, opt,
+                       num_steps=10, batch_size=self.BATCH_SIZE,
+                       dataset_val=self.VAL_DATASET,
+                       checkpoint_criterion='never',
+                       shuffle=False, restore_best_checkpoint=False)
+        assert len(hist.l_train_loss_per_step) == 10
+
+    def test_never_checkpoint_set_warns_and_clears(self, caplog):
+        """criterion='never' + num_steps_checkpoint set → warning issued."""
+        net = self._net()
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            self._fit(net, self.DATASET,
+                      num_steps=12,
+                      checkpoint_criterion='never',
+                      num_steps_checkpoint=5)
+        assert "checkpoint_criterion == 'never'" in caplog.text
+
+    def test_never_with_val_defaults_eval_static_per_epoch(self):
+        """criterion='never', finite dataset + val → eval_static=num_steps_per_epoch=4."""
+        net = self._net()
+        hist = self._fit(net, self.DATASET,
+                         num_steps=12,
+                         checkpoint_criterion='never',
+                         dataset_val=self.VAL_DATASET)
+        val_steps = [s for s, _ in hist.l_val_loss]
+        assert val_steps == [0, 4, 8]
+
+    def test_never_iterable_val_no_eval_static_warns(self, caplog):
+        """criterion='never', IterableDataset + val, no eval_static → warns, no val loss."""
+        net = self._net()
+        opt = self._opt(net)
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            hist = net.fit(_IterableDataset(), _mse, opt,
+                           num_steps=10, batch_size=self.BATCH_SIZE,
+                           dataset_val=self.VAL_DATASET,
+                           checkpoint_criterion='never',
+                           shuffle=False, restore_best_checkpoint=False)
+        assert 'validation loss will not be computed' in caplog.text
+        assert hist.l_val_loss == []
+
+    # always branch ============================================================
+
+    def test_always_coerces_report_moving_to_one(self, tmp_path, caplog):
+        """criterion='always', num_steps_report_moving=5 → warns and coerces to 1."""
+        net = self._net(nn_folder=str(tmp_path))
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            hist = self._fit(net, self.DATASET,
+                             num_steps=5,
+                             checkpoint_criterion='always',
+                             num_steps_report_moving=5)
+        assert 'num_steps_report_moving=1' in caplog.text
+        # Moving metric reported at every step > 0
+        steps = [s for s, _ in hist.l_train_loss_me]
+        assert steps == [1, 2, 3, 4]
+
+    def test_always_coerces_checkpoint_to_one(self, tmp_path, caplog):
+        """criterion='always', num_steps_checkpoint=5 → warns and coerces to 1."""
+        net = self._net(nn_folder=str(tmp_path))
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            self._fit(net, self.DATASET,
+                      num_steps=5,
+                      checkpoint_criterion='always',
+                      num_steps_checkpoint=5)
+        assert 'num_steps_checkpoint=1' in caplog.text
+
+    def test_always_saves_every_step(self, tmp_path):
+        """criterion='always': a checkpoint is saved at every step > 0."""
+        net = self._net(nn_folder=str(tmp_path))
+        opt = self._opt(net)
+        num_steps = 5
+        hist = net.fit(self.DATASET, _mse, opt,
+                       num_steps=num_steps, batch_size=self.BATCH_SIZE,
+                       checkpoint_criterion='always',
+                       shuffle=False, restore_best_checkpoint=False)
+        # Steps 1..num_steps-1 each trigger a checkpoint (step 0 is skipped
+        # because b_save_checkpoint requires ind_step > 0).
+        assert hist.l_step_inds_checkpoints == list(range(1, num_steps))
+
+    # checkpoint_criterion resolution ==========================================
+
+    def test_nn_folder_none_forces_never_warns(self, caplog):
+        """nn_folder=None + criterion='val_loss' → warns and overrides to 'never'."""
+        net = self._net(nn_folder=None)
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            self._fit(net, self.DATASET,
+                      num_steps=12,
+                      checkpoint_criterion='val_loss',
+                      dataset_val=self.VAL_DATASET,
+                      num_steps_eval_static=4)
+        assert "Setting checkpoint_criterion = 'never'" in caplog.text
+
+    def test_nn_folder_none_silent_when_criterion_none(self, caplog):
+        """nn_folder=None + criterion=None → no override warning (silently uses 'never')."""
+        net = self._net(nn_folder=None)
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            self._fit(net, self.DATASET,
+                      num_steps=12,
+                      checkpoint_criterion=None)
+        assert "Setting checkpoint_criterion = 'never'" not in caplog.text
+
+    def test_nn_folder_none_silent_when_criterion_never(self, caplog):
+        """nn_folder=None + criterion='never' → no override warning."""
+        net = self._net(nn_folder=None)
+        with caplog.at_level(logging.WARNING, logger='gsim'):
+            self._fit(net, self.DATASET,
+                      num_steps=12,
+                      checkpoint_criterion='never')
+        assert "Setting checkpoint_criterion = 'never'" not in caplog.text
+
+    def test_nn_folder_set_default_val_loss_when_val(self, tmp_path):
+        """nn_folder set + val data + criterion=None → defaults to 'val_loss'."""
+        net = self._net(nn_folder=str(tmp_path))
+        opt = self._opt(net)
+        hist = net.fit(self.DATASET, _mse, opt,
+                       num_steps=8, batch_size=self.BATCH_SIZE,
+                       dataset_val=self.VAL_DATASET,
+                       shuffle=False, restore_best_checkpoint=False)
+        assert len(hist.l_val_loss) > 0
+
+    def test_nn_folder_set_default_train_loss_me_when_no_val(self, tmp_path):
+        """nn_folder set + no val + criterion=None → defaults to 'train_loss_me'."""
+        net = self._net(nn_folder=str(tmp_path))
+        opt = self._opt(net)
+        hist = net.fit(self.DATASET, _mse, opt,
+                       num_steps=8, batch_size=self.BATCH_SIZE,
+                       shuffle=False, restore_best_checkpoint=False)
+        assert hist.l_val_loss == []
+        assert len(hist.l_train_loss_me) > 0
