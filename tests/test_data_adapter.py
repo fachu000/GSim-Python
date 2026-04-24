@@ -1,9 +1,10 @@
 import os
 import tempfile
+from collections.abc import Sized
 
 import pytest
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset
 
 from gsim.include.neural_net import NeuralNet
 from gsim.include.neural_net.data_adapter import AdaptationSpec, DataAdapter
@@ -75,6 +76,18 @@ class _InputOnlyDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.inputs[idx]
+
+
+class _InputOnlyIterableDataset(IterableDataset):
+    """Iterable dataset that contains only inputs (no targets)."""
+
+    def __init__(self, n=10, feat_dim=4):
+        self.inputs = torch.arange(n * feat_dim,
+                                   dtype=torch.float).reshape(n, feat_dim)
+
+    def __iter__(self):
+        for row in self.inputs:
+            yield row
 
 
 class _SimpleNet(NeuralNet):
@@ -207,6 +220,22 @@ def test_wrap_in_adapter_no_targets():
     for i in range(5):
         raw_input = raw_ds[i]
         adapted_input = adapted_ds[i]
+        assert torch.allclose(adapted_input, raw_input * 2)
+
+
+def test_wrap_in_adapter_iterable_dataset_is_not_sized():
+    net = _SimpleNet(data_adapter=_DoubleAdapter())
+    raw_ds = _InputOnlyIterableDataset(n=5)
+    adapted_ds = net.wrap_in_adapter(raw_ds, no_targets=True)
+
+    assert isinstance(adapted_ds, IterableDataset)
+    assert not isinstance(adapted_ds, Sized)
+    with pytest.raises(TypeError):
+        len(adapted_ds)
+
+    adapted_items = list(adapted_ds)
+    assert len(adapted_items) == 5
+    for adapted_input, raw_input in zip(adapted_items, raw_ds.inputs):
         assert torch.allclose(adapted_input, raw_input * 2)
 
 

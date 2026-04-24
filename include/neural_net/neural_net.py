@@ -19,6 +19,8 @@ from tqdm import tqdm
 
 from ...include.utils.statistics import mean_and_ci
 
+from .datasets import (AdaptedDataset, AdaptedIterableDataset,
+                       AdaptedSizedDataset, make_adapted_dataset)
 from .normalizers import Normalizer, DefaultNormalizer
 from .data_adapter import AdaptationSpec, DataAdapter
 
@@ -194,7 +196,6 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     """
 
     _initialized = False
-
     def __init__(self,
                  *args,
                  nn_folder=None,
@@ -621,36 +622,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 d = pickle.load(f)
             return cls(l_items=d["l_items"], preprocessed=d["preprocessed"])
 
-    class AdaptedDataset(Dataset):
-
-        def __init__(self, inner, adapter: DataAdapter, spec: AdaptationSpec,
-                     inner_dataset_has_no_targets: bool):
-            self._inner = inner
-            self._adapter = adapter
-            self.adaptation_spec = spec
-            self._inner_dataset_has_no_targets = \
-                inner_dataset_has_no_targets
-
-        def __len__(self):
-            return len(self._inner)  # type: ignore
-
-        @property
-        def no_targets(self) -> bool:
-            return self._adapter.get_no_targets(
-                self._inner_dataset_has_no_targets, self.adaptation_spec)
-
-        def __getitem__(self, idx):
-            item = self._inner[idx]
-            if self._inner_dataset_has_no_targets:
-                return self._adapter.adapt_input(item, self.adaptation_spec)
-            return self._adapter.adapt_dataset_item(item, self.adaptation_spec)
-
-    def wrap_in_adapter(
-            self,
-            dataset: Dataset,
-            preprocess_only: bool = False,
-            inference: bool = False,
-            no_targets: bool = False) -> 'NeuralNet.AdaptedDataset':
+    def wrap_in_adapter(self,
+                        dataset: Dataset,
+                        preprocess_only: bool = False,
+                        inference: bool = False,
+                        no_targets: bool = False) -> AdaptedDataset:
         """Return a lazy wrapper dataset that applies the data adapter to each
         item.
 
@@ -661,9 +637,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             the dataset contains only inputs (no targets).
 
         Returns:
-            A Dataset `D` that applies the adapter on-the-fly in
-            ``__getitem__``. The outputs of this method comprise only inputs if
-            `D.no_targets` is True and pairs (input, target) otherwise. 
+            A dataset `D` that applies the adapter on-the-fly. The outputs of
+            this method comprise only inputs if `D.no_targets` is True and
+            pairs (input, target) otherwise.
         """
         assert self.data_adapter is not None, \
             "wrap_in_adapter requires data_adapter to be set."
@@ -674,8 +650,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             inference=inference,
         )
 
-        return NeuralNet.AdaptedDataset(dataset, self.data_adapter, spec,
-                                        no_targets)
+        return make_adapted_dataset(dataset, self.data_adapter, spec,
+                                    no_targets)
 
     def load_or_create_preprocessed_dataset(
             self,
@@ -704,16 +680,19 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         dataset = dataset_or_callback() if callable(
             dataset_or_callback) else dataset_or_callback
 
-        assert hasattr(dataset, '__len__'), \
+        assert isinstance(dataset, Dataset), \
+            "Only torch Dataset instances can be preprocessed and saved to disk."
+        assert isinstance(dataset, Sized), \
             ("Only datasets with a finite length can be preprocessed and saved to disk.")
 
         gsim_logger.info(f"Preprocessing dataset and saving to {path}...")
         preprocessed_dataset = self.wrap_in_adapter(dataset,
                                                     preprocess_only=True,
                                                     no_targets=no_targets)
+        assert isinstance(preprocessed_dataset, AdaptedSizedDataset)
         l_items = [
             preprocessed_dataset[i] for i in range(len(preprocessed_dataset))
-        ]  # type: ignore
+        ]  
         nn_dataset = NeuralNet.NeuralNetDataset(l_items, preprocessed=True)
         nn_dataset.save(path)
         return nn_dataset
@@ -905,10 +884,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 in the adapter wrapper (used by ``predict``).
         """
         if self.data_adapter is not None:
-            dataset = self.wrap_in_adapter(dataset,
-                                           inference=inference,
-                                           no_targets=no_targets)
-            effective_no_targets = dataset.no_targets
+            adapted_dataset: Any = self.wrap_in_adapter(dataset,
+                                                        inference=inference,
+                                                        no_targets=no_targets)
+            effective_no_targets = adapted_dataset.no_targets
+            dataset = adapted_dataset
         else:
             effective_no_targets = no_targets
 
@@ -1351,6 +1331,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             batch_mean = float(v_loss_train_this_step.mean())
             if train_loss_me is None:
                 return batch_mean
+            assert me_coefficient is not None
             return me_coefficient * train_loss_me + (
                 1.0 - me_coefficient) * batch_mean
 
@@ -1669,9 +1650,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                                       batch_size_eval,
                                                       shuffle,
                                                       no_targets=no_targets)
-        dataloader_val = self.make_data_loader(
-            dataset_val, batch_size, shuffle,
-            no_targets=no_targets) if val else None
+        if val:
+            assert dataset_val is not None
+            dataloader_val = self.make_data_loader(dataset_val,
+                                                   batch_size,
+                                                   shuffle,
+                                                   no_targets=no_targets)
+        else:
+            dataloader_val = None
 
         # History initialization
         hist = self.load_hist()
