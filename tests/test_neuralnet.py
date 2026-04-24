@@ -369,12 +369,12 @@ class TestFitStepIntervals:
     # train_loss_me branch =====================================================
 
     def test_train_loss_me_defaults_from_report_moving(self):
-        """num_steps_checkpoint resolves from num_steps_report_moving=5."""
+        """num_steps_checkpoint resolves from num_steps_report_training_loss=5."""
         net = self._net()
         hist = self._fit(net, self.DATASET,
                          num_steps=15,
                          checkpoint_criterion='train_loss_me',
-                         num_steps_report_moving=5)
+                         num_steps_report_training_loss=5)
         steps = [s for s, _ in hist.l_train_loss_me]
         assert steps == [5, 10]
 
@@ -388,7 +388,7 @@ class TestFitStepIntervals:
         assert steps == [4, 8]
 
     def test_train_loss_me_no_length_raises(self, tmp_path):
-        """IterableDataset with no num_steps_checkpoint or num_steps_report_moving raises."""
+        """IterableDataset with no num_steps_checkpoint or num_steps_report_training_loss raises."""
         net = self._net(nn_folder=str(tmp_path))
         opt = self._opt(net)
         with pytest.raises(ValueError, match="dataset has no length"):
@@ -399,7 +399,7 @@ class TestFitStepIntervals:
                     shuffle=False, restore_best_checkpoint=False)
 
     def test_train_loss_me_val_iterable_no_eval_static_warns(self, tmp_path, caplog):
-        """Warns and skips val loss when IterableDataset + val + no num_steps_eval_static."""
+        """Warns and skips val loss when IterableDataset + val + no num_steps_eval."""
         net = self._net(nn_folder=str(tmp_path))
         opt = self._opt(net)
         with caplog.at_level(logging.WARNING, logger='gsim'):
@@ -413,31 +413,31 @@ class TestFitStepIntervals:
         assert hist.l_val_loss == []
 
     def test_train_loss_me_report_moving_none_runs(self, tmp_path):
-        """With num_steps_report_moving=None, moving metric fires only on checkpoint steps."""
+        """With num_steps_report_training_loss=None, moving metric fires only on checkpoint steps."""
         net = self._net(nn_folder=str(tmp_path))
         hist = self._fit(net, self.DATASET,
                          num_steps=12,
                          checkpoint_criterion='train_loss_me',
                          num_steps_checkpoint=4,
-                         num_steps_report_moving=None)
+                         num_steps_report_training_loss=None)
         steps = [s for s, _ in hist.l_train_loss_me]
         assert steps == [4, 8]
 
     # val_loss branch ==========================================================
 
     def test_val_loss_eval_static_copied_to_checkpoint(self, tmp_path):
-        """With only num_steps_eval_static=4, num_steps_checkpoint resolves to 4."""
+        """With only num_steps_eval=4, num_steps_checkpoint resolves to 4."""
         net = self._net(nn_folder=str(tmp_path))
         hist = self._fit(net, self.DATASET,
                          num_steps=8,
                          checkpoint_criterion='val_loss',
                          dataset_val=self.VAL_DATASET,
-                         num_steps_eval_static=4)
+                         num_steps_eval=4)
         val_steps = [s for s, _ in hist.l_val_loss]
         assert val_steps == [0, 4]
 
     def test_val_loss_checkpoint_copied_to_eval_static(self, tmp_path):
-        """With only num_steps_checkpoint=4, num_steps_eval_static resolves to 4."""
+        """With only num_steps_checkpoint=4, num_steps_eval resolves to 4."""
         net = self._net(nn_folder=str(tmp_path))
         hist = self._fit(net, self.DATASET,
                          num_steps=8,
@@ -477,7 +477,7 @@ class TestFitStepIntervals:
                       checkpoint_criterion='val_loss',
                       dataset_val=self.VAL_DATASET,
                       num_steps_checkpoint=10,
-                      num_steps_eval_static=3)
+                      num_steps_eval=3)
         assert 'multiple' in caplog.text.lower()
 
     # never branch =============================================================
@@ -533,14 +533,14 @@ class TestFitStepIntervals:
     # always branch ============================================================
 
     def test_always_coerces_report_moving_to_one(self, tmp_path, caplog):
-        """criterion='always', num_steps_report_moving=5 → warns and coerces to 1."""
+        """criterion='always', num_steps_report_training_loss=5 → warns and coerces to 1."""
         net = self._net(nn_folder=str(tmp_path))
         with caplog.at_level(logging.WARNING, logger='gsim'):
             hist = self._fit(net, self.DATASET,
                              num_steps=5,
                              checkpoint_criterion='always',
-                             num_steps_report_moving=5)
-        assert 'num_steps_report_moving=1' in caplog.text
+                             num_steps_report_training_loss=5)
+        assert 'num_steps_report_training_loss=1' in caplog.text
         # Moving metric reported at every step > 0
         steps = [s for s, _ in hist.l_train_loss_me]
         assert steps == [1, 2, 3, 4]
@@ -578,7 +578,7 @@ class TestFitStepIntervals:
                       num_steps=12,
                       checkpoint_criterion='val_loss',
                       dataset_val=self.VAL_DATASET,
-                      num_steps_eval_static=4)
+                      num_steps_eval=4)
         assert "Setting checkpoint_criterion = 'never'" in caplog.text
 
     def test_nn_folder_none_silent_when_criterion_none(self, caplog):
@@ -663,7 +663,7 @@ class TestIterableDatasetSupport:
                        num_steps=10, batch_size=self.BATCH_SIZE,
                        dataset_val=self.VAL_DATASET,
                        checkpoint_criterion='never',
-                       num_steps_eval_static=5,
+                       num_steps_eval=5,
                        static_max_num_examples=6,
                        shuffle=False, restore_best_checkpoint=False)
         assert len(hist.l_val_loss) > 0

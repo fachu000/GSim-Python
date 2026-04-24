@@ -132,20 +132,21 @@ def _get_me_coefficient_from_optimizer(optimizer) -> float:
     """Return the β₁ coefficient shared by all param_groups of `optimizer`.
 
     Raises ValueError if the optimizer does not expose β₁, or if param_groups
-    disagree on its value (in which case pass `me_coefficient` explicitly to
+    disagree on its value (in which case pass `training_loss_fogetting_factor` explicitly to
     `NeuralNet.fit`).
     """
     values = []
     for group in optimizer.param_groups:
         betas = group.get("betas")
         if betas is None:
-            raise ValueError("Optimizer does not expose a beta_1 coefficient. "
-                             "Pass me_coefficient explicitly to fit().")
+            raise ValueError(
+                "Optimizer does not expose a beta_1 coefficient. "
+                "Pass training_loss_fogetting_factor explicitly to fit().")
         values.append(betas[0])
     if len(set(values)) > 1:
         raise ValueError(
             "Optimizer param_groups have differing beta_1 values. "
-            "Pass me_coefficient explicitly to fit().")
+            "Pass training_loss_fogetting_factor explicitly to fit().")
     return float(values[0])
 
 
@@ -956,9 +957,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             batch_size_eval=None,
             shuffle=True,
             num_patience_evals=None,
-            num_steps_eval_static: int | None = None,
-            num_steps_report_moving: int | None = None,
-            me_coefficient: float | None = None,
+            num_steps_eval: int | None = None,
+            num_steps_report_training_loss: int | None = None,
+            training_loss_fogetting_factor: float | None = None,
             num_steps_checkpoint: int | None = None,
             checkpoint_criterion: str | None = None,
             restore_best_checkpoint=None,
@@ -1052,29 +1053,32 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             loss does not improve its minimum in this session for
             `num_patience_evals` evaluations, training will be stopped.
 
-            `num_steps_eval_static` (int | None): Number of steps between static
-            metric evaluations. Here, "static" means that the network weights
-            are the same across batches, i.e., there is no gradient noise. The
+            `num_steps_eval` (int | None): Number of steps between static metric
+            evaluations. Here, "static" means that the network weights are the
+            same across batches, i.e., there is no gradient noise. The
             validation loss is an example of a static metric. 
 
-            `num_steps_report_moving` (int | None): Every this many steps, the
-            moving estimate of the training loss is logged and stored. This
-            estimate is obtained as an exponential moving average of the
-            per-step (batch) training loss (cf. `me_coefficient` below). It is
-            called a `moving` estimate because the weights of the network are
-            different at each step. This estimate is conceptually the loss seen
-            by the optimizer. This parameter will typically be adjusted to print
-            the moving estimate every few seconds.
+            `num_steps_report_training_loss` (int | None): Every this many
+            steps, the moving estimate of the training loss is logged and
+            stored. This estimate is obtained as an exponential moving average
+            of the per-step (batch) training loss (cf.
+            `training_loss_fogetting_factor` below). It is called a `moving`
+            estimate because the weights of the network are different at each
+            step. This estimate is conceptually the loss seen by the optimizer.
+            This parameter will typically be adjusted to print the moving
+            estimate every few seconds.
 
-            `me_coefficient` (float | None): The coefficient used for the
-            exponential moving average of the training loss:
-                train_loss_me = me_coefficient * train_loss_me
-                               + (1 - me_coefficient) * loss_this_step
-            If `me_coefficient==None`, it is read from the optimizer as β₁ (e.g.
-            `betas[0]` for Adam/AdamW). All param_groups must agree on β₁;
-            otherwise a ValueError is raised asking for an explicit value. If
-            the optimizer does not expose β₁ (e.g. plain SGD), a ValueError is
-            also raised. The coefficient can differ between sessions.
+            `training_loss_fogetting_factor` (float | None): The coefficient
+            used for the exponential moving average of the training loss:
+                train_loss_me = training_loss_fogetting_factor * train_loss_me
+                               + (1 - training_loss_fogetting_factor) *
+                                 loss_this_step
+            If `training_loss_fogetting_factor==None`, it is read from the
+            optimizer as β₁ (e.g. `betas[0]` for Adam/AdamW). All param_groups
+            must agree on β₁; otherwise a ValueError is raised asking for an
+            explicit value. If the optimizer does not expose β₁ (e.g. plain
+            SGD), a ValueError is also raised. The coefficient can differ
+            between sessions.
 
             `num_steps_checkpoint` (int | None): Number of steps between
             checkpoints.
@@ -1124,9 +1128,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             confidence interval for unnormalized loss evaluations.
 
             `obtain_static_training_loss` (bool): If True, the training loss is
-            computed for fixed network weights every `num_steps_eval_static`
-            steps. This allows one to see the training loss without the gradient
-            noise. Default is False.
+            computed for fixed network weights every `num_steps_eval` steps.
+            This allows one to see the training loss without the gradient noise.
+            Default is False.
 
             `max_grad_norm` (float | None): If provided, gradients are clipped
             to have maximum norm `max_grad_norm` during training.
@@ -1165,13 +1169,13 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         def resolve_fit_schedule(checkpoint_criterion, val,
                                  num_steps_per_epoch, num_steps_checkpoint,
-                                 num_steps_eval_static,
-                                 num_steps_report_moving):
+                                 num_steps_eval,
+                                 num_steps_report_training_loss):
             """Resolves checkpoint_criterion and the three step-interval
             arguments.
 
             Returns (checkpoint_criterion, num_steps_checkpoint,
-                     num_steps_eval_static, num_steps_report_moving).
+                     num_steps_eval, num_steps_report_training_loss).
             Any of the three `num_steps_` constants may remain None on exit.
             
             The main rule that this function needs to ensure is the following:
@@ -1186,10 +1190,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                   then `num_steps_checkpoint` is set. 
         
                 - If checkpoint_criterion is "val_loss", then
-                  `num_steps_eval_static` must be set. 
+                  `num_steps_eval` must be set. 
             
             RULE 2: If checkpoint_criterion is "always", then
-                `num_steps_checkpoint` must be 1, and `num_steps_report_moving`
+                `num_steps_checkpoint` must be 1, and `num_steps_report_training_loss`
                 must be 1.
                 
             RULE 3: If checkpoint_criterion is "never", then
@@ -1212,62 +1216,62 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             # --- Step 1: resolve step intervals ---
             if checkpoint_criterion == "train_loss_me":
                 if num_steps_checkpoint is None:
-                    if num_steps_report_moving is not None:
-                        num_steps_checkpoint = num_steps_report_moving
+                    if num_steps_report_training_loss is not None:
+                        num_steps_checkpoint = num_steps_report_training_loss
                     elif num_steps_per_epoch is not None:
                         num_steps_checkpoint = num_steps_per_epoch
                     else:
                         raise ValueError(
-                            "At least `num_steps_report_moving` or `num_steps_checkpoint` need to be "
+                            "At least `num_steps_report_training_loss` or `num_steps_checkpoint` need to be "
                             "provided because checkpoint_criterion is 'train_loss_me' and the dataset "
                             "has no length.")
-                if num_steps_eval_static is None and val:
+                if num_steps_eval is None and val:
                     if num_steps_per_epoch is not None:
-                        num_steps_eval_static = num_steps_per_epoch
+                        num_steps_eval = num_steps_per_epoch
                     else:
                         gsim_logger.warning(
-                            "Validation data was provided but `num_steps_eval_static` was not set, "
+                            "Validation data was provided but `num_steps_eval` was not set, "
                             "so the validation loss will not be computed.")
 
             elif checkpoint_criterion == "val_loss":
                 assert val, "Validation data must be provided to use val_loss as checkpoint criterion."
-                if num_steps_eval_static is None and num_steps_checkpoint is not None:
-                    num_steps_eval_static = num_steps_checkpoint
-                elif num_steps_checkpoint is None and num_steps_eval_static is not None:
-                    num_steps_checkpoint = num_steps_eval_static
-                elif num_steps_eval_static is None and num_steps_checkpoint is None:
+                if num_steps_eval is None and num_steps_checkpoint is not None:
+                    num_steps_eval = num_steps_checkpoint
+                elif num_steps_checkpoint is None and num_steps_eval is not None:
+                    num_steps_checkpoint = num_steps_eval
+                elif num_steps_eval is None and num_steps_checkpoint is None:
                     if num_steps_per_epoch is not None:
-                        num_steps_eval_static = num_steps_per_epoch
+                        num_steps_eval = num_steps_per_epoch
                         num_steps_checkpoint = num_steps_per_epoch
                     else:
                         raise ValueError(
-                            "At least `num_steps_eval_static` or `num_steps_checkpoint` need to be "
+                            "At least `num_steps_eval` or `num_steps_checkpoint` need to be "
                             "provided because `checkpoint_criterion` is 'val_loss' and the dataset "
                             "has no length.")
-                # num_steps_report_moving left as-is
-                assert num_steps_checkpoint >= num_steps_eval_static, \
-                    "num_steps_checkpoint must be at least num_steps_eval_static when using val_loss as checkpoint criterion."
-                if num_steps_checkpoint % num_steps_eval_static != 0:
+                # num_steps_report_training_loss left as-is
+                assert num_steps_checkpoint >= num_steps_eval, \
+                    "num_steps_checkpoint must be at least num_steps_eval when using val_loss as checkpoint criterion."
+                if num_steps_checkpoint % num_steps_eval != 0:
                     gsim_logger.warning(
                         "It is recommended that num_steps_checkpoint be a multiple of "
-                        "num_steps_eval_static when using 'val_loss' as checkpoint criterion. "
+                        "num_steps_eval when using 'val_loss' as checkpoint criterion. "
                         "Otherwise, the reference validation loss may be stale."
                     )
 
             elif checkpoint_criterion in ("never", "always"):
-                if num_steps_eval_static is None and val:
+                if num_steps_eval is None and val:
                     if num_steps_per_epoch is not None:
-                        num_steps_eval_static = num_steps_per_epoch
+                        num_steps_eval = num_steps_per_epoch
                     else:
                         gsim_logger.warning(
-                            "Validation data was provided but `num_steps_eval_static` was not set, "
+                            "Validation data was provided but `num_steps_eval` was not set, "
                             "so the validation loss will not be computed.")
                 if checkpoint_criterion == "always":
-                    if num_steps_report_moving is not None and num_steps_report_moving != 1:
+                    if num_steps_report_training_loss is not None and num_steps_report_training_loss != 1:
                         gsim_logger.warning(
-                            "When checkpoint_criterion == 'always', only num_steps_report_moving=1 "
+                            "When checkpoint_criterion == 'always', only num_steps_report_training_loss=1 "
                             "is allowed.")
-                    num_steps_report_moving = 1
+                    num_steps_report_training_loss = 1
                     if num_steps_checkpoint is not None and num_steps_checkpoint != 1:
                         gsim_logger.warning(
                             "When checkpoint_criterion == 'always', only num_steps_checkpoint=1 "
@@ -1284,8 +1288,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 raise ValueError(
                     f"Invalid checkpoint_criterion: {checkpoint_criterion}")
 
-            return (checkpoint_criterion, num_steps_checkpoint,
-                    num_steps_eval_static, num_steps_report_moving)
+            return (checkpoint_criterion, num_steps_checkpoint, num_steps_eval,
+                    num_steps_report_training_loss)
 
         def fit_normalizer_if_needed():
             assert self.normalizer is not None
@@ -1332,9 +1336,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             batch_mean = float(v_loss_train_this_step.mean())
             if train_loss_me is None:
                 return batch_mean
-            assert me_coefficient is not None
-            return me_coefficient * train_loss_me + (
-                1.0 - me_coefficient) * batch_mean
+            assert training_loss_fogetting_factor is not None
+            return training_loss_fogetting_factor * train_loss_me + (
+                1.0 - training_loss_fogetting_factor) * batch_mean
 
         def report_training_loss_me(ind_step, hist: TrainingHistory,
                                     train_loss_me):
@@ -1478,11 +1482,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             if checkpoint_criterion == "val_loss":
                 assert val, "Validation data must be provided to use val_loss as checkpoint criterion."
                 assert len(hist.l_val_loss) > 0, \
-                    "Validation loss has not been evaluated yet. This should not happen, as num_steps_checkpoint >= num_steps_eval_static."
+                    "Validation loss has not been evaluated yet. This should not happen, as num_steps_checkpoint >= num_steps_eval."
                 is_value_fresh = hist.l_val_loss[-1][0] == ind_step
                 if not is_value_fresh:
                     gsim_logger.warning(
-                        "The checkpoint criterion is `val_loss`, but the validation loss has not been evaluated at this step. Using the last available value. To avoid this issue, set num_steps_checkpoint to be a multiple of num_steps_eval_static."
+                        "The checkpoint criterion is `val_loss`, but the validation loss has not been evaluated at this step. Using the last available value. To avoid this issue, set num_steps_checkpoint to be a multiple of num_steps_eval."
                     )
                 if has_metric_improved_since_prev_checkpoint(hist.l_val_loss):
                     gsim_logger.info(
@@ -1627,16 +1631,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             num_steps = num_epochs * num_steps_per_epoch
         if restore_best_checkpoint is None:
             restore_best_checkpoint = (self.nn_folder is not None)
-        if me_coefficient is None:
-            me_coefficient = _get_me_coefficient_from_optimizer(optimizer)
+        if training_loss_fogetting_factor is None:
+            training_loss_fogetting_factor = _get_me_coefficient_from_optimizer(
+                optimizer)
         else:
-            assert 0 <= me_coefficient < 1, "me_coefficient must be in [0, 1)."
+            assert 0 <= training_loss_fogetting_factor < 1, "training_loss_fogetting_factor must be in [0, 1)."
 
-        (checkpoint_criterion, num_steps_checkpoint, num_steps_eval_static,
-         num_steps_report_moving) = resolve_fit_schedule(
+        (checkpoint_criterion, num_steps_checkpoint, num_steps_eval,
+         num_steps_report_training_loss) = resolve_fit_schedule(
              checkpoint_criterion, val, num_steps_per_epoch,
-             num_steps_checkpoint, num_steps_eval_static,
-             num_steps_report_moving)
+             num_steps_checkpoint, num_steps_eval,
+             num_steps_report_training_loss)
 
         # Fit the normalizer
         if self.normalizer is not None:
@@ -1710,8 +1715,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                      and ind_step % num_steps_checkpoint == 0)
 
                 # Moving-metric reporting
-                if (num_steps_report_moving is not None and ind_step
-                        and ind_step % num_steps_report_moving
+                if (num_steps_report_training_loss is not None and ind_step
+                        and ind_step % num_steps_report_training_loss
                         == 0) or b_save_checkpoint:
                     # Not reported when ind_step == 0 because that potentially
                     # results in a very noisy value which may ruin reporting the
@@ -1720,8 +1725,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     self.save_hist(hist)
 
                 # Static-metric evaluation
-                if (num_steps_eval_static is not None
-                        and ind_step % num_steps_eval_static == 0):
+                if (num_steps_eval is not None
+                        and ind_step % num_steps_eval == 0):
                     eval_static_metrics(ind_step, hist, dataloader_train_eval,
                                         dataloader_val)
                     self.save_hist(hist)

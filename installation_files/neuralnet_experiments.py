@@ -72,7 +72,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             f_loss,
             optimizer,
             val_split=0.4,
-            num_steps_report_moving=30,
+            num_steps_report_training_loss=30,
             num_steps=1000,
             batch_size=200,
         )
@@ -132,7 +132,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             f_loss,
             optimizer,
             lr_scheduler=lr_scheduler,
-            num_steps_report_moving=10,
+            num_steps_report_training_loss=10,
             val_split=0.2,
             num_steps=500,
             batch_size=200,
@@ -284,8 +284,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                 num_epochs=d_net["num_epochs"],
                 batch_size=200,
                 eval_unnormalized_losses=True,
-                num_steps_eval_static=302,
-                num_steps_report_moving=305,
+                num_steps_eval=302,
+                num_steps_report_training_loss=305,
             )
             d_net["metrics"] = net.evaluate(dataset,
                                             batch_size=32,
@@ -358,8 +358,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                            dataset_val=val_dataset,
                            num_steps=num_steps,
                            batch_size=200,
-                           num_steps_report_moving=1,
-                           num_steps_eval_static=1,
+                           num_steps_report_training_loss=1,
+                           num_steps_eval=1,
                            num_steps_checkpoint=20)
 
         def plot_data():
@@ -718,8 +718,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                                      num_steps=50000,
                                      batch_size=64,
                                      eval_unnormalized_losses=False,
-                                     num_steps_eval_static=2000,
-                                     num_steps_report_moving=128,
+                                     num_steps_eval=2000,
+                                     num_steps_report_training_loss=128,
                                      keep_best_val_weights=True,
                                      static_max_hci=0.01,
                                      live_plot=True)
@@ -963,8 +963,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             dataset_val,  # val_split must be None (default) for IterableDataset
             num_steps=num_steps,
             batch_size=32,
-            num_steps_eval_static=300,
-            num_steps_report_moving=150,
+            num_steps_eval=300,
+            num_steps_report_training_loss=150,
             static_max_num_examples=200,  # cap each eval pass at 200 examples
             checkpoint_criterion='never',
             restore_best_checkpoint=False,
