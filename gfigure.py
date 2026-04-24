@@ -593,7 +593,8 @@ class VerticalLinesCurve(Curve):
                 try:
                     self.subplot.ylim = self.subplot.get_auto_ylims(.2)
                 except ValueError:
-                    self.subplot.ylim = (0, 1)
+                    self.subplot.ylim = (0, 1) if not self.subplot.logy else (
+                        1e-1, 1)
             ymin, ymax = self.subplot.ylim
 
             self.xaxis = []
@@ -1045,7 +1046,7 @@ class Subplot:
                                         1]:  # Avoids a warning if a curve is constant.
                                     self.axes.set_ylim(ylims)
                             except ValueError:
-                                pass       
+                                pass
 
         return self.axes
 
@@ -1118,12 +1119,12 @@ class Subplot:
                 "Could not determine automatic y-limits; no 2D curves found.")
         y_range = y_max - y_min
         ylim = (y_min - ylim_factor * y_range, y_max + ylim_factor * y_range)
-        
+
         if "logy" in dir(self) and self.logy:
-            # We cannot pass negative y-limits to matplotlib when using a logarithmic scale. 
+            # We cannot pass negative y-limits to matplotlib when using a logarithmic scale.
             if ylim[0] <= 0:
                 ylim = (y_min, y_max + ylim_factor * y_range)
-        
+
         return ylim
 
 
