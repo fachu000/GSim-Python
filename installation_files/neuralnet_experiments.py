@@ -72,6 +72,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             f_loss,
             optimizer,
             val_split=0.4,
+            num_steps_report_moving=30,
             num_steps=1000,
             batch_size=200,
         )
@@ -131,6 +132,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             f_loss,
             optimizer,
             lr_scheduler=lr_scheduler,
+            num_steps_report_moving=10,
             val_split=0.2,
             num_steps=500,
             batch_size=200,
@@ -488,14 +490,15 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             dataset,
             optimizer=torch.optim.Adam(net.parameters(), lr=0.01),
             val_split=0.2,
-            num_epochs=100,
+            num_epochs=20,
             batch_size=128,
             f_loss=lambda m_pred, m_targets: torch.mean(
                 (m_targets - m_pred)**2, dim=1),
             eval_unnormalized_losses=True,
         )
 
-        return net.plot_training_history(d_training_history)
+        return net.plot_training_history(d_training_history,
+                                         first_step_to_plot=10)
 
     # Experiment illustrating DataAdapter.adapt_input.
     #
@@ -914,8 +917,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             def __init__(self, n: int, seed: int = 0):
                 rng = np.random.default_rng(seed)
                 x = rng.uniform(-1.0, 1.0, n).astype(np.float32)
-                y = (target_fn(x) + 0.1 *
-                     rng.standard_normal(n)).astype(np.float32)
+                y = (target_fn(x) + 0.1 * rng.standard_normal(n)).astype(
+                    np.float32)
                 self.x = torch.from_numpy(x[:, None])
                 self.y = torch.from_numpy(y[:, None])
 
@@ -930,8 +933,10 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             def __init__(self):
                 super().__init__()
                 self.net = nn.Sequential(
-                    nn.Linear(1, 64), nn.Tanh(),
-                    nn.Linear(64, 64), nn.Tanh(),
+                    nn.Linear(1, 64),
+                    nn.Tanh(),
+                    nn.Linear(64, 64),
+                    nn.Tanh(),
                     nn.Linear(64, 1),
                 )
                 self.initialize()
@@ -946,7 +951,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         dataset_val = SineDataset(n=200, seed=1)
 
         net = MLP()
-        f_loss = lambda pred, tgt: ((pred - tgt) ** 2).squeeze(-1)
+        f_loss = lambda pred, tgt: ((pred - tgt)**2).squeeze(-1)
         optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
 
         num_steps = 3000
@@ -954,12 +959,13 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             dataset_train,
             f_loss,
             optimizer,
-            dataset_val=dataset_val,       # val_split must be None (default) for IterableDataset
+            dataset_val=
+            dataset_val,  # val_split must be None (default) for IterableDataset
             num_steps=num_steps,
             batch_size=32,
             num_steps_eval_static=300,
             num_steps_report_moving=150,
-            static_max_num_examples=200,   # cap each eval pass at 200 examples
+            static_max_num_examples=200,  # cap each eval pass at 200 examples
             checkpoint_criterion='never',
             restore_best_checkpoint=False,
         )

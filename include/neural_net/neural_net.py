@@ -196,6 +196,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     """
 
     _initialized = False
+
     def __init__(self,
                  *args,
                  nn_folder=None,
@@ -692,7 +693,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         assert isinstance(preprocessed_dataset, AdaptedSizedDataset)
         l_items = [
             preprocessed_dataset[i] for i in range(len(preprocessed_dataset))
-        ]  
+        ]
         nn_dataset = NeuralNet.NeuralNetDataset(l_items, preprocessed=True)
         nn_dataset.save(path)
         return nn_dataset
@@ -1900,7 +1901,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
     @staticmethod
     def plot_training_history(hist: TrainingHistory,
-                              first_step_to_plot=0,
+                              first_step_to_plot=None,
                               logx=False,
                               logy=False):
         """
@@ -1916,7 +1917,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 values, learning rates, and checkpoint information.
             first_step_to_plot (int, optional): The first step index to include
                 in the plot. Steps before this index are excluded from the view.
-                Defaults to 0.
+                If None, then the first step in the history is used.
             logx (bool, optional): If True, the x-axis uses a logarithmic scale.
                 Defaults to False.
             logy (bool, optional): If True, the y-axis uses a logarithmic scale.
@@ -2011,9 +2012,39 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             return l_x_solid, l_y_solid, l_x_dotted, l_y_dotted
 
         def plot_keys(l_keys, margin_coef=0.1):
-            max_y_value = -np.inf
-            min_y_value = np.inf
-            max_x_value = -np.inf
+
+            def get_first_step_to_plot():
+                if first_step_to_plot is not None:
+                    return first_step_to_plot
+                min_step = np.inf
+                for key in l_keys:
+                    lt_step_values = getattr(hist, key)
+                    if len(lt_step_values) == 0:
+                        continue
+                    step_values = [t[0] for t in lt_step_values]
+                    min_step = min(min_step, min(step_values))
+                return int(min_step) if min_step != np.inf else 0
+
+            def get_axis_limits():
+                max_y_value = -np.inf
+                min_y_value = np.inf
+                max_x_value = -np.inf
+                min_x_value = get_first_step_to_plot()
+                for key in l_keys:
+                    lt_step_values = getattr(hist, key)
+                    # Keep those values within x range
+                    lt_step_values = [(t[0], t[1]) for t in lt_step_values
+                                      if t[0] >= min_x_value]
+                    if len(lt_step_values) == 0:
+                        continue
+
+                    l_steps = [t[0] for t in lt_step_values]
+                    l_vals = [t[1] for t in lt_step_values]
+                    max_y_value = max(max_y_value, np.nanmax(l_vals))
+                    min_y_value = min(min_y_value, np.nanmin(l_vals))
+                    max_x_value = max(max_x_value, l_steps[-1])
+                return min_x_value, max_x_value, min_y_value, max_y_value
+
             s1 = Subplot(xlabel="Step", ylabel="Loss", logx=logx, logy=logy)
 
             l_session_steps = NeuralNet.get_session_history_steps(hist)
@@ -2046,19 +2077,23 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                  legend=key,
                                  styles=f"-#{ind_key}")
 
-                if len(l_y) > first_step_to_plot:
-                    l_vals = l_y[first_step_to_plot:]
-                    max_y_value = max(max_y_value, np.nanmax(l_vals))
-                    min_y_value = min(min_y_value, np.nanmin(l_vals))
-                if len(l_x) > 0:
-                    max_x_value = max(max_x_value, l_x[-1])
+            # Set axis limits
+            min_x_value, max_x_value, min_y_value, max_y_value = get_axis_limits(
+            )
             if max_y_value != -np.inf and min_y_value != np.inf:
                 margin = margin_coef * (max_y_value - min_y_value)
-                if not logy:  # not implemented for logy == True
-                    s1.ylim = (min_y_value - margin, max_y_value + margin)
+                if not logy:
+                    min_y_value = min_y_value - margin
+                else:
+                    min_y_value = min_y_value - margin if (
+                        min_y_value - margin > 0) else min_y_value
+                s1.ylim = (min_y_value, max_y_value + margin)
             if max_x_value != -np.inf:
-                if not logx:  # not implemented for logx == True
-                    s1.xlim = (first_step_to_plot, max_x_value)
+                if logx:
+                    min_x_value = max(
+                        min_x_value,
+                        1)  # log scale cannot include non-positive values
+                s1.xlim = (min_x_value, max_x_value)
             return s1
 
         def plot_loss_and_learning_rate():
