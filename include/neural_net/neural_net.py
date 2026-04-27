@@ -228,6 +228,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         """
 
+        def set_normalizer_if_needed(normalizer):
+            # Set the normalizer to None or to an instance of Normalizer
+            if normalizer is None:
+                return None
+            elif isinstance(normalizer, str):
+                return DefaultNormalizer(mode=normalizer)
+            elif isinstance(normalizer, Normalizer):
+                return normalizer
+            else:
+                raise ValueError("Invalid normalizer type.")
+
         super().__init__(*args, **kwargs)
         if device_type is not None:
             self.device_type = device_type
@@ -245,16 +256,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             gsim_logger.warning("* " * 50)
         self.nn_folder = nn_folder
 
-        # Set the normalizer to None or to an instance of Normalizer
-        if normalizer is None:
-            self.normalizer = None
-        elif isinstance(normalizer, str):
-            self.normalizer = DefaultNormalizer(mode=normalizer,
-                                                nn_folder=self.nn_folder)
-        elif isinstance(normalizer, Normalizer):
-            self.normalizer = normalizer
-        else:
-            raise ValueError("Invalid normalizer type.")
+        self.normalizer = set_normalizer_if_needed(normalizer)
+        if self.normalizer is not None and hasattr(
+                self.normalizer, "folder") and self.normalizer.folder is None:
+            self.normalizer.folder = self.nn_folder
 
         self.data_adapter = data_adapter
 
@@ -505,8 +510,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         if max_num_examples is None and max_hci is None:
             raise ValueError(
-                "_eval_static_metric requires either a dataset with length, "
-                "max_num_examples, or max_hci.")
+                "Evaluation of static metrics requires either a dataset with length, "
+                "(static_)max_num_examples, or (static_)max_hci.")
 
         l_loss_vals = []
         num_batches = 0

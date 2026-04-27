@@ -1,32 +1,4 @@
-import functools
-import logging
-import os
-import pickle
-import tempfile
-from abc import ABC, abstractmethod
-from collections.abc import Sized
-from typing import Callable, Generic, TypeVar, Union
-
-import numpy as np
-import torch
-from torch import nn
-from torch.utils.data import (DataLoader, Dataset, Subset, default_collate,
-                              random_split)
-from tqdm import tqdm
-
-from .defs import InputType, OutputType, TargetType, LossFunType
-
-gsim_logger = logging.getLogger("gsim")
-
-
-class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
-
-    l_params_to_save = [
-    ]  # List the attributes to be saved/loaded in this list
-
-    def __init__(self, nn_folder: str | None = None):
-        """       
-
+"""
         General scheme of normalization and unnormalization
         ---------------------------------------------------
 
@@ -77,8 +49,55 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
               computations are carried out by the GPU. Thus, while the GPU
               processes one batch, the CPU can normalize the next batches.
 
+"""
+
+import functools
+import logging
+import os
+import pickle
+import tempfile
+from abc import ABC, abstractmethod
+from collections.abc import Sized
+from typing import Callable, Generic, Literal, TypeVar, Union
+
+import numpy as np
+import torch
+from torch import nn
+from torch.utils.data import (DataLoader, Dataset, Subset, default_collate,
+                              random_split)
+from tqdm import tqdm
+
+from .defs import InputType, OutputType, TargetType, LossFunType
+
+gsim_logger = logging.getLogger("gsim")
+
+
+class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
+
+    l_params_to_save = [
+    ]  # List the attributes to be saved/loaded in this list
+
+    def __init__(self, folder: str | None | Literal[False] = None):
+        """       
+        See a description of normalization in `normalizers.py`. 
+        
+        Args:
+            `folder`: folder where the parameters of the normalizer are loaded
+            from this folder when the NeuralNet is initialized (cf.
+            self.load_if_file_exists) and saved when fitting (cf. `self.save`). 
+            
+                - If None, the folder to be used is the same as the
+                one used by the NeuralNet (nn_folder). In this case,
+                `self.folder` will be set by the NeuralNet constructor. 
+                
+                - If False, no folder is used. 
+
         """
-        self.nn_folder = nn_folder
+
+        assert folder is None or isinstance(
+            folder,
+            str) or folder is False, "Invalid value for the argument `folder`."
+        self.folder = folder
 
         # The following variable is True iff the normalizer has been fitted or
         # its parameters have been loaded from a file.
@@ -102,7 +121,7 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
 
     def save(self):
         # Override if necessary
-        if self.nn_folder is None:
+        if not self.folder:
             return
 
         d_params = {
@@ -111,7 +130,7 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
         }
 
         assert self.params_file is not None
-        if os.path.exists(self.nn_folder):
+        if os.path.exists(self.folder):
             with open(self.params_file, "wb") as f:
                 pickle.dump(d_params, f)
 
@@ -135,9 +154,10 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
 
     @property
     def params_file(self):
-        if self.nn_folder is None:
+        if not self.folder:
             return None
-        return os.path.join(self.nn_folder, "normalizer.pk")
+        assert isinstance(self.folder, str), "Invalid value for `self.folder`."
+        return os.path.join(self.folder, "normalizer.pk")
 
     @abstractmethod
     def normalize_input_batch(self, input_batch: InputType) -> InputType:
@@ -231,7 +251,7 @@ class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
                 - "targets": normalize only the targets
                 - "both": normalize both input and targets
 
-            `nn_folder`: if not None, the statistics of the normalization are
+            `folder`: if not None, the statistics of the normalization are
             loaded from this folder. When training, the statistics are saved in
             this folder.
         

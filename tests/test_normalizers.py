@@ -441,7 +441,7 @@ class TestMultiFeatNormalizer:
                     StdFeatNormalizer(),
                     IdentityFeatNormalizer(),
                 ],
-                nn_folder=temp_dir,
+                folder=temp_dir,
             )
 
             normalizer1.fit(dataset)
@@ -469,7 +469,7 @@ class TestMultiFeatNormalizer:
                     StdFeatNormalizer(),
                     IdentityFeatNormalizer(),
                 ],
-                nn_folder=temp_dir,
+                folder=temp_dir,
             )
 
             normalizer2.load_if_file_exists()
