@@ -72,7 +72,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             f_loss,
             optimizer,
             val_split=0.4,
-            num_steps_report_training_loss=30,
+            num_steps_report_training_loss=1000,
+            num_steps_eval=100,  # This is required to plot the validation loss. 
             num_steps=1000,
             batch_size=200,
         )
@@ -209,7 +210,10 @@ class ExperimentSet(gsim.AbstractExperimentSet):
                 return x
 
         def compare_unnormalized_losses():
-            lt_vals = l_nets[0]["history"].l_train_loss_me
+            hist = l_nets[0]["history"]
+            ema = hist.compute_train_loss_me()
+            lt_vals = [(s, ema[s])
+                       for s in hist.l_reported_train_loss_me_steps]
             last_val = lt_vals[-1][1]
             G = GFigure(xlabel="Epoch",
                         ylabel="Loss",

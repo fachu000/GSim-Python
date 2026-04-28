@@ -1,3 +1,4 @@
+import bisect
 import time
 import functools
 import logging
@@ -138,7 +139,7 @@ def _get_me_coefficient_from_optimizer(optimizer) -> float:
     """Return the β₁ coefficient shared by all param_groups of `optimizer`.
 
     Raises ValueError if the optimizer does not expose β₁, or if param_groups
-    disagree on its value (in which case pass `training_loss_fogetting_factor` explicitly to
+    disagree on its value (in which case pass `training_loss_forgetting_factor` explicitly to
     `NeuralNet.fit`).
     """
     values = []
@@ -147,12 +148,12 @@ def _get_me_coefficient_from_optimizer(optimizer) -> float:
         if betas is None:
             raise ValueError(
                 "Optimizer does not expose a beta_1 coefficient. "
-                "Pass training_loss_fogetting_factor explicitly to fit().")
+                "Pass training_loss_forgetting_factor explicitly to fit().")
         values.append(betas[0])
     if len(set(values)) > 1:
         raise ValueError(
             "Optimizer param_groups have differing beta_1 values. "
-            "Pass training_loss_fogetting_factor explicitly to fit().")
+            "Pass training_loss_forgetting_factor explicitly to fit().")
     return float(values[0])
 
 
@@ -172,17 +173,116 @@ class TrainingHistory():
         self.l_step_inds_checkpoints = []
 
         # The following are lists of (ind_step, value)
-        self.l_train_loss_me = []
         self.l_train_loss = []
         self.l_val_loss = []
         self.l_unnormalized_train_loss = []
         self.l_unnormalized_val_loss = []
+
+        # Forgetting factor used to compute the moving estimate of the training
+        # loss. Set by `fit`. The moving estimate is recomputed on demand from
+        # `l_train_loss_per_step` via `TrainingHistory.compute_train_loss_me`.
+        self.last_used_training_loss_forgetting_factor: float | None = None
+
+        # Step indices at which the moving estimate of the training loss was
+        # reported. Used by `fit` to compute the "best so far" log string.
+        # On `fit` resume, indices that fell into the abandoned tail of the
+        # most recent session are dropped via
+        # `drop_reported_train_loss_me_steps_since_last_restored_checkpoint`.
+        self.l_reported_train_loss_me_steps: list[int] = []
 
     @property
     def ind_first_step_current_session(self):
         if len(self.l_step_inds_started_training) == 0:
             return 0
         return self.l_step_inds_started_training[-1]
+
+    def compute_train_loss_me(self,
+                              forgetting_factor: float | None = None
+                              ) -> list[float]:
+        """
+        Returns the bias-corrected EMA of the per-step training loss as a list
+        of length `len(self.l_train_loss_per_step)`. The entry with index `i`
+        holds the moving estimate at step `i`.
+
+        The list is built from two parallel sequences of the same length:
+        `l_train_loss_ema` (raw EMA) and `l_num_batches_ema` (effective count)
+        defined recursively as
+            - if i ∈ l_step_inds_started_training and m is the largest
+              checkpoint index strictly smaller than i (taking m = ∅ if no such
+              checkpoint exists, with ema_m = 0 and num_batches_m = 0):
+                  ema_i          = β · ema_m + (1 - β) · x_i num_batches_i  =
+                  num_batches_m + 1
+            - otherwise:
+                  ema_i          = β · ema_{i-1} + (1 - β) · x_i num_batches_i
+                  = num_batches_{i-1} + 1
+        with x_i = self.l_train_loss_per_step[i]. The returned value at index i
+        is the bias-corrected estimate
+            ema_i / (1 - β^{num_batches_i}).
+
+        If `forgetting_factor` is None, it is read from
+        `self.last_used_training_loss_forgetting_factor`. Returns the empty list
+        if there are no per-step values or no forgetting factor.
+        """
+        if forgetting_factor is None:
+            forgetting_factor = self.last_used_training_loss_forgetting_factor
+        num_steps = len(self.l_train_loss_per_step)
+        if num_steps == 0 or forgetting_factor is None:
+            return []
+
+        beta = float(forgetting_factor)
+        started = set(self.l_step_inds_started_training)
+        l_ckpts = self.l_step_inds_checkpoints  # already sorted ascending
+
+        l_train_loss_ema: list[float] = [np.nan] * num_steps
+        l_num_batches_ema: list[int] = [-1] * num_steps
+        s_at_ckpt: dict[int, float] = {}
+        t_at_ckpt: dict[int, int] = {}
+        next_ckpt_idx = 0  # index of the next entry of l_ckpts to consume
+
+        for i in range(num_steps):
+            if i in started:
+                idx = bisect.bisect_left(l_ckpts, i)
+                if idx > 0:
+                    m = l_ckpts[idx - 1]
+                    s_base = s_at_ckpt[m]
+                    t_base = t_at_ckpt[m]
+                else:
+                    s_base = 0.0
+                    t_base = 0
+            else:
+                s_base = l_train_loss_ema[i - 1] if i > 0 else 0.0
+                t_base = l_num_batches_ema[i - 1] if i > 0 else 0
+            x = float(self.l_train_loss_per_step[i])
+            l_train_loss_ema[i] = beta * s_base + (1.0 - beta) * x
+            l_num_batches_ema[i] = t_base + 1
+            if next_ckpt_idx < len(l_ckpts) and l_ckpts[next_ckpt_idx] == i:
+                s_at_ckpt[i] = l_train_loss_ema[i]
+                t_at_ckpt[i] = l_num_batches_ema[i]
+                next_ckpt_idx += 1
+
+        return [
+            s / (1.0 - beta**t) if (1.0 - beta**t) > 0 else s
+            for s, t in zip(l_train_loss_ema, l_num_batches_ema)
+        ]
+
+    def drop_reported_train_loss_me_steps_since_last_restored_checkpoint(
+            self) -> None:
+        """
+        Drops entries of `l_reported_train_loss_me_steps` whose step lies
+        strictly after the most recent checkpoint, i.e. reports that came
+        from the abandoned tail discarded by the latest checkpoint
+        restoration. If no checkpoint exists, no entries are dropped.
+
+        This relies on being called once per `fit` resume so that, at any
+        time, at most one such abandoned tail can be present.
+        """
+        if not self.l_step_inds_checkpoints:
+            return
+        last_restored = self.l_step_inds_checkpoints[-1]
+        self.l_reported_train_loss_me_steps = [
+            s for s in self.l_reported_train_loss_me_steps
+            if s <= last_restored
+        ]
 
 
 class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
@@ -971,7 +1071,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             num_patience_evals=None,
             num_steps_eval: int | None = None,
             num_steps_report_training_loss: int | None = None,
-            training_loss_fogetting_factor: float | None = None,
+            training_loss_forgetting_factor: float | None = None,
             num_steps_checkpoint: int | None = None,
             checkpoint_criterion: str | None = None,
             restore_best_checkpoint=None,
@@ -1071,21 +1171,21 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             validation loss is an example of a static metric. 
 
             `num_steps_report_training_loss` (int | None): Every this many
-            steps, the moving estimate of the training loss is logged and
-            stored. This estimate is obtained as an exponential moving average
-            of the per-step (batch) training loss (cf.
-            `training_loss_fogetting_factor` below). It is called a `moving`
+            steps, the moving estimate of the training loss is printed. This
+            estimate is obtained as an exponential moving average of the
+            per-step (batch) training loss (cf.
+            `training_loss_forgetting_factor` below). It is called a `moving`
             estimate because the weights of the network are different at each
-            step. This estimate is conceptually the loss seen by the optimizer.
-            This parameter will typically be adjusted to print the moving
-            estimate every few seconds.
+            step (gradient noise). This estimate is conceptually the loss seen
+            by the optimizer. It is recommended to adjust this parameter to
+            print the moving estimate every few seconds.
 
-            `training_loss_fogetting_factor` (float | None): The coefficient
+            `training_loss_forgetting_factor` (float | None): The coefficient
             used for the exponential moving average of the training loss:
-                train_loss_me = training_loss_fogetting_factor * train_loss_me
-                               + (1 - training_loss_fogetting_factor) *
+                train_loss_me = training_loss_forgetting_factor * train_loss_me
+                               + (1 - training_loss_forgetting_factor) *
                                  loss_this_step
-            If `training_loss_fogetting_factor==None`, it is read from the
+            If `training_loss_forgetting_factor==None`, it is read from the
             optimizer as β₁ (e.g. `betas[0]` for Adam/AdamW). All param_groups
             must agree on β₁; otherwise a ValueError is raised asking for an
             explicit value. If the optimizer does not expose β₁ (e.g. plain
@@ -1344,31 +1444,16 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 hist.l_batch_length_per_step[step_ind_start:])
             return examples_this_session / total_time_training
 
-        def get_training_loss_me(train_loss_me, v_loss_train_this_step):
-            batch_mean = float(v_loss_train_this_step.mean())
-            if train_loss_me is None:
-                return batch_mean
-            assert training_loss_fogetting_factor is not None
-            return training_loss_fogetting_factor * train_loss_me + (
-                1.0 - training_loss_fogetting_factor) * batch_mean
-
-        def report_training_loss_me(ind_step, hist: TrainingHistory,
-                                    train_loss_me):
-            hist.l_train_loss_me += [(ind_step, train_loss_me)]
+        def report_training_loss_me(ind_step, hist: TrainingHistory):
+            hist.l_reported_train_loss_me_steps.append(ind_step)
+            ema = hist.compute_train_loss_me(training_loss_forgetting_factor)
+            l_reported = [(s, ema[s])
+                          for s in hist.l_reported_train_loss_me_steps]
             gsim_logger.info(
                 f"{get_log_step_str(ind_step)}: "
-                f"training loss me = {get_log_loss_str(hist.l_train_loss_me)}, "
+                f"training loss me = {get_log_loss_str(l_reported)}, "
                 f"lr = {hist.l_lr[-1]:.2g}, "
                 f"{int(eval_examples_per_second(hist))} examples/s")
-
-        def load_train_loss_me(hist: TrainingHistory):
-            if not hist.l_step_inds_checkpoints:
-                return None
-            last_ckpt_step = hist.l_step_inds_checkpoints[-1]
-            for (step, val) in reversed(hist.l_train_loss_me):
-                if step == last_ckpt_step:
-                    return val
-            return None
 
         def eval_static_metrics(ind_step, hist: TrainingHistory,
                                 dataloader_train_eval, dataloader_val):
@@ -1506,20 +1591,16 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     )
                     save_checkpoint()
             elif checkpoint_criterion == "train_loss_me":
-
-                # hist.l_train_loss_me should not be empty, as this list should
-                # be updated by report_training_loss_me before entering
-                # save_checkpoint_if_needed.
-                assert len(hist.l_train_loss_me) > 0
-
-                is_value_fresh = hist.l_train_loss_me[-1][0] == ind_step
-                if not is_value_fresh:
-                    # Again, this should not happen
-                    gsim_logger.warning(
-                        "The checkpoint criterion is `train_loss_me`, but the training moving estimate loss has not been reported at this step. Using the last available value. "
-                    )
-                if has_metric_improved_since_prev_checkpoint(
-                        hist.l_train_loss_me):
+                # The following list should have been populated
+                assert len(hist.l_train_loss_per_step) > 0
+                l_ema = hist.compute_train_loss_me(
+                    training_loss_forgetting_factor)
+                current_value = l_ema[ind_step]
+                if len(hist.l_step_inds_checkpoints) == 0:
+                    prev_value = float('inf')
+                else:
+                    prev_value = l_ema[hist.l_step_inds_checkpoints[-1]]
+                if current_value < prev_value:
                     gsim_logger.info(
                         f"Step {ind_step}: train_loss_me improved, saving checkpoint."
                     )
@@ -1549,14 +1630,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             self.save_hist(hist)
 
         def load_checkpoint():
-            nonlocal train_loss_me
             assert self.nn_folder is not None
             self.load_weights_from_path(
                 self.get_weight_file_path(self.nn_folder))
-            optimizer_loaded = load_optimizer_state(
+            load_optimizer_state(
                 self.get_optimizer_state_file_path(self.nn_folder))
-            if optimizer_loaded:
-                train_loss_me = load_train_loss_me(hist)
             if lr_scheduler is not None:
                 load_lr_scheduler_state(
                     self.get_lr_scheduler_state_file_path(self.nn_folder))
@@ -1643,11 +1721,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             num_steps = num_epochs * num_steps_per_epoch
         if restore_best_checkpoint is None:
             restore_best_checkpoint = (self.nn_folder is not None)
-        if training_loss_fogetting_factor is None:
-            training_loss_fogetting_factor = _get_me_coefficient_from_optimizer(
+        if training_loss_forgetting_factor is None:
+            training_loss_forgetting_factor = _get_me_coefficient_from_optimizer(
                 optimizer)
         else:
-            assert 0 <= training_loss_fogetting_factor < 1, "training_loss_fogetting_factor must be in [0, 1)."
+            assert 0 <= training_loss_forgetting_factor < 1, "training_loss_forgetting_factor must be in [0, 1)."
 
         (checkpoint_criterion, num_steps_checkpoint, num_steps_eval,
          num_steps_report_training_loss) = resolve_fit_schedule(
@@ -1680,16 +1758,15 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         # History initialization
         hist = self.load_hist()
         ind_step = len(hist.l_train_loss_per_step)
+        hist.drop_reported_train_loss_me_steps_since_last_restored_checkpoint()
         hist.l_step_inds_started_training += [ind_step]
+        hist.last_used_training_loss_forgetting_factor = training_loss_forgetting_factor
         total_time_training = 0.0
-        train_loss_me = None
 
         # Try to load the optimizer state if available in self.nn_folder
         if self.nn_folder is not None:
-            optimizer_loaded = load_optimizer_state(
+            load_optimizer_state(
                 self.get_optimizer_state_file_path(self.nn_folder))
-            if optimizer_loaded:
-                train_loss_me = load_train_loss_me(hist)
             if lr_scheduler is not None:
                 load_lr_scheduler_state(
                     self.get_lr_scheduler_state_file_path(self.nn_folder))
@@ -1719,8 +1796,6 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 hist.l_train_loss_per_step += [v_loss_train_this_step.mean()]
                 hist.l_batch_length_per_step += [len(v_loss_train_this_step)]
                 hist.l_lr.append(optimizer.param_groups[0]["lr"])
-                train_loss_me = get_training_loss_me(train_loss_me,
-                                                     v_loss_train_this_step)
 
                 b_save_checkpoint = (num_steps_checkpoint is not None
                                      and ind_step > 0
@@ -1733,7 +1808,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     # Not reported when ind_step == 0 because that potentially
                     # results in a very noisy value which may ruin reporting the
                     # best value so far.
-                    report_training_loss_me(ind_step, hist, train_loss_me)
+                    report_training_loss_me(ind_step, hist)
                     self.save_hist(hist)
 
                 # Static-metric evaluation
@@ -1852,6 +1927,26 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             raise TypeError("Unsupported type.")
 
     @staticmethod
+    def _select_plot_steps(num_steps: int, max_points: int,
+                           logx: bool) -> list[int]:
+        """
+        Returns up to `max_points` integer steps in [0, num_steps - 1],
+        spaced uniformly (or log-uniformly if `logx`).
+        """
+        if num_steps <= 0 or max_points <= 0:
+            return []
+        if num_steps <= max_points:
+            return list(range(num_steps))
+        if logx:
+            hi = num_steps - 1
+            if hi < 1:
+                return list(range(num_steps))
+            pts = np.logspace(0.0, np.log10(hi), max_points)
+        else:
+            pts = np.linspace(0, num_steps - 1, max_points)
+        return sorted(set(int(round(p)) for p in pts))
+
+    @staticmethod
     def get_session_history_steps(
             hist: TrainingHistory,
             include_current_session=False) -> List[Tuple[int, int]]:
@@ -1920,7 +2015,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     def plot_training_history(hist: TrainingHistory,
                               first_step_to_plot=None,
                               logx=False,
-                              logy=False):
+                              logy=False,
+                              max_train_loss_me_points: int = 500):
         """
         Plots the training history of a neural network.
 
@@ -2028,14 +2124,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
             return l_x_solid, l_y_solid, l_x_dotted, l_y_dotted
 
-        def plot_keys(l_keys, margin_coef=0.1):
+        def plot_keys(l_label_data, margin_coef=0.1):
+            """`l_label_data`: list of (label, lt_step_values) pairs."""
 
             def get_first_step_to_plot():
                 if first_step_to_plot is not None:
                     return first_step_to_plot
                 min_step = np.inf
-                for key in l_keys:
-                    lt_step_values = getattr(hist, key)
+                for _, lt_step_values in l_label_data:
                     if len(lt_step_values) == 0:
                         continue
                     step_values = [t[0] for t in lt_step_values]
@@ -2047,8 +2143,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 min_y_value = np.inf
                 max_x_value = -np.inf
                 min_x_value = get_first_step_to_plot()
-                for key in l_keys:
-                    lt_step_values = getattr(hist, key)
+                for _, lt_step_values in l_label_data:
                     # Keep those values within x range
                     lt_step_values = [(t[0], t[1]) for t in lt_step_values
                                       if t[0] >= min_x_value]
@@ -2068,8 +2163,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             current_session_start = hist.l_step_inds_started_training[
                 -1] if hist.l_step_inds_started_training else 0
 
-            for ind_key, key in enumerate(l_keys):
-                lt_step_values = getattr(hist, key)
+            for ind_key, (label, lt_step_values) in enumerate(l_label_data):
                 if len(lt_step_values) == 0:
                     # Add a placeholder to be modified later in case of dynamic plotting
                     s1.add_curve(yaxis=[np.nan], legend="_")
@@ -2091,7 +2185,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 if l_x_solid:
                     s1.add_curve(xaxis=l_x_solid,
                                  yaxis=l_y_solid,
-                                 legend=key,
+                                 legend=label,
                                  styles=f"-#{ind_key}")
 
             # Set axis limits
@@ -2143,7 +2237,26 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     style="r--",
                     legend_str="Session starts")
 
-            s1 = plot_keys(["l_train_loss_me", "l_train_loss", "l_val_loss"])
+            def make_train_loss_me_points():
+                """
+                Returns a list of (step, train_loss_me) points to plot, where
+                train_loss_me is the moving-metric estimate of the training loss
+                at that step. The points are selected to be at most
+                `max_train_loss_me_points` and spaced uniformly or log-uniformly
+                according to `logx`.
+                """
+                l_query_steps = NeuralNet._select_plot_steps(
+                    num_steps=len(hist.l_train_loss_per_step),
+                    max_points=max_train_loss_me_points,
+                    logx=logx,
+                )
+                l_ema = hist.compute_train_loss_me()
+                return [(s, l_ema[s]) for s in l_query_steps]
+
+            l_train_loss_me = make_train_loss_me_points()
+            s1 = plot_keys([("l_train_loss_me", l_train_loss_me),
+                            ("l_train_loss", hist.l_train_loss),
+                            ("l_val_loss", hist.l_val_loss)])
             plot_restored_checkpoints_and_session_starts(s1, hist)
             s2 = Subplot(xlabel="Step",
                          ylabel="Learning rate",
@@ -2157,15 +2270,15 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         def plot_unnormalized_loss():
             l_keys = ["l_unnormalized_train_loss", "l_unnormalized_val_loss"]
-            l_keys_to_plot = []
+            l_label_data = []
             for key in l_keys:
                 lt_step_vals = getattr(hist, key)
                 if len(lt_step_vals):
-                    l_keys_to_plot.append(key)
-            if not len(l_keys_to_plot):
+                    l_label_data.append((key, lt_step_vals))
+            if not len(l_label_data):
                 return None
             G = GFigure()
-            G.l_subplots = [plot_keys(l_keys_to_plot)]
+            G.l_subplots = [plot_keys(l_label_data)]
             return G
 
         l_G = []
