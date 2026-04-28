@@ -1421,7 +1421,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 hist.l_train_loss += [(ind_step, m)]
                 l_str_log.append("train loss = " +
                                  get_log_loss_str(hist.l_train_loss, hci))
-            if dataloader_val:
+            if dataloader_val is not None:
                 gsim_logger.info("│ Computing the validation loss...")
                 m, hci = self._eval_static_metric(
                     dataloader_val,
