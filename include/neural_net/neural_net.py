@@ -24,6 +24,12 @@ from .datasets import (AdaptedDataset, AdaptedIterableDataset,
 from .normalizers import Normalizer, DefaultNormalizer
 from .data_adapter import AdaptationSpec, DataAdapter
 
+
+def _seed_worker(worker_id):
+    seed = (torch.initial_seed() + worker_id) % (2**32)
+    np.random.seed(seed)
+
+
 from .defs import InputType, OutputType, TargetType, LossFunType
 from ...gfigure import Subplot
 
@@ -915,6 +921,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                           pin_memory=(self.device_type == "cuda"),
                           multiprocessing_context=mp_context,
                           persistent_workers=self.num_workers > 0,
+                          worker_init_fn=_seed_worker,
                           collate_fn=functools.partial(
                               self.collate_and_normalize,
                               no_targets=effective_no_targets))
@@ -1309,7 +1316,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             else:
                 gsim_logger.info(
                     "The normalizer will not be fitted since its parameters have been loaded. "
-                    " If you want to fit it again, delete/rename normalizer.pk."
+                    "If you want to fit it again, delete/rename normalizer.pk."
                 )
 
         def get_log_loss_str(l_loss, hci=None):
