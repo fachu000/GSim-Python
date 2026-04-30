@@ -1074,6 +1074,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             training_loss_forgetting_factor: float | None = None,
             num_steps_checkpoint: int | None = None,
             checkpoint_criterion: str | None = None,
+            min_num_steps_reliable_train_loss_me: int | None = None,
             restore_best_checkpoint=None,
             keep_best_val_weights=False,
             static_max_hci=None,
@@ -1209,6 +1210,21 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                   interval (num_steps_checkpoint), regardless of whether the
                   loss has improved.
                 - "never": Checkpoints are never saved during training.
+
+            `min_num_steps_reliable_train_loss_me` (int | None): Step index
+            below which the moving estimate of the training loss is considered
+            too noisy to be used as a "best so far" criterion. When set:
+
+                - The "(best …)" annotation in the per-step training-loss-me log
+                  is suppressed while `ind_step` is below this threshold, and
+                  earlier reports are excluded from the running minimum once the
+                  threshold has been crossed.
+                - When `checkpoint_criterion == "train_loss_me"`, no checkpoint
+                  is saved before this step.
+
+                Known limitation: the threshold is applied to the absolute step
+                index, regardless of whether training has been resumed from a
+                checkpoint. 
 
             `restore_best_checkpoint` (bool | None): Whether to restore the best
             checkpoint at the end of training. If None, it defaults to True if
@@ -1419,11 +1435,19 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     "If you want to fit it again, delete/rename normalizer.pk."
                 )
 
-        def get_log_loss_str(l_loss, hci=None):
+        def get_log_loss_str(l_loss,
+                             hci=None,
+                             min_step_for_declaring_best=None):
             l_vals = [t[1] for t in l_loss]
             str_val = f"{l_vals[-1]:.{num_significant_figures}g}"
             if hci is not None:
                 str_val += f" ± {hci:.{num_significant_figures}g}"
+            if min_step_for_declaring_best is not None:
+                if l_loss[-1][0] < min_step_for_declaring_best:
+                    return str_val
+                l_vals = [
+                    v for (s, v) in l_loss if s >= min_step_for_declaring_best
+                ]
             if l_vals[-1] == min(l_vals):
                 return f"{str_val} (best ⭐)"
             else:
@@ -1451,7 +1475,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                           for s in hist.l_reported_train_loss_me_steps]
             gsim_logger.info(
                 f"{get_log_step_str(ind_step)}: "
-                f"training loss me = {get_log_loss_str(l_reported)}, "
+                f"training loss me = {get_log_loss_str(l_reported, min_step_for_declaring_best=min_num_steps_reliable_train_loss_me)}, "
                 f"lr = {hist.l_lr[-1]:.2g}, "
                 f"{int(eval_examples_per_second(hist))} examples/s")
 
@@ -1591,6 +1615,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     )
                     save_checkpoint()
             elif checkpoint_criterion == "train_loss_me":
+                if (min_num_steps_reliable_train_loss_me is not None
+                        and ind_step < min_num_steps_reliable_train_loss_me):
+                    # The moving estimate of the training loss is too noisy to
+                    # be used as a checkpoint criterion, so we skip
+                    # checkpointing until we have enough data points.
+                    return
                 # The following list should have been populated
                 assert len(hist.l_train_loss_per_step) > 0
                 l_ema = hist.compute_train_loss_me(
