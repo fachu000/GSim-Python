@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is intended to help agents work with code in this repository.
 
 ## Overview
 
@@ -24,16 +24,13 @@ python -m pytest tests/test_normalizers.py::TestStdFeatNormalizer::test_fit -v
 
 The repo has no build step or linter configured. Tests use pytest ≥ 7.0 with `-ra -q` defaults.
 
-When installed as a submodule in a parent repo, experiments are run from the parent root:
+When installed as a submodule in a parent repo, experiments are run from the parent root. The most useful command for an agent is:
 
 ```bash
-python run_experiment.py <experiment_id>          # run and store figures
-python run_experiment.py -p <experiment_id>       # plot stored figures only
-python run_experiment.py -e <experiment_id>       # export PDF
-python run_experiment.py -n <experiment_id>       # run without plotting (useful for agents)
-python run_experiment.py -x <module> <id>         # select experiment module
-python run_experiment.py -g <gpu_id> <id>         # select GPU
+python run_experiment.py -x <module> -n <id>  # runs experiment_<id> in <module>
 ```
+See `gsim/doc/running_instructions.md` for more details on running experiments. 
+
 
 ## Architecture
 
@@ -81,3 +78,8 @@ bash gsim/install.sh   # creates run_experiment.py, gsim_conf.py, experiments/ i
 - `tests/test_normalizers.py` — all normalizer classes including incremental fit and save/load
 - `tests/test_neuralnet.py` — `NeuralNet` training, data loading, LR schedulers, inference
 - `tests/conftest.py` — adds parent directory to `sys.path` so `import gsim` works from `tests/`
+
+
+## Development
+
+For developing the GSim-Python submodule itself, see `doc/dev.md` and `doc/coding_guidelines.md`.

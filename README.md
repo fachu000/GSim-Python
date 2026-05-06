@@ -32,11 +32,10 @@ run but without running it again, type
 $ python run_experiment.py -p 1002
 ```
 
-GFigure offers a neater interface than matplotlib, whose goal was to
-resemble the interface of MATLAB. Figures are collections of
-subfigures, subfigures are collections of curves. Simple to
-understand. See the description at the top of `gsim.gfigure` for a small tutorial on
-how to use GFigure.
+GFigure offers a neater interface than matplotlib, whose goal was to resemble
+the interface of MATLAB. Figures are collections of subfigures, subfigures are
+collections of curves. Simple to understand. See the description at the top of
+`gsim.gfigure` for a small tutorial on how to use GFigure.
 
 Pull requests are welcome!!
 
