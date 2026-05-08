@@ -241,18 +241,26 @@ def inspect_hist(data, hist_args={}):
     G.plot()
 
 
-def hist_bin_edges_to_xy(hist, bin_edges):
-    """ PDF estimate from a histogram with bins of possibly different lengths. """
+def hist_bin_edges_to_xy(hist, bin_edges, density=False):
+    """Return step-plot coordinates for a histogram.
+
+    If `density` is True, the y-axis values represent a density estimate.
+    Otherwise, the y-axis values are the raw counts returned by
+    `np.histogram`.
+    """
 
     def duplicate_entries(v_in):
         """ If v_in = [v1,v2,...vN], this function returns [v1, v1, v2, v2, ..., vN, vN]."""
         return np.ravel(np.tile(v_in, (2, 1)).T)
 
-    v_bin_widths = bin_edges[1:] - bin_edges[:-1]
-    v_p = hist / np.sum(hist) / v_bin_widths
+    if density:
+        v_bin_widths = bin_edges[1:] - bin_edges[:-1]
+        v_y_interior = hist / np.sum(hist) / v_bin_widths
+    else:
+        v_y_interior = hist
 
     v_x = duplicate_entries(bin_edges)
-    v_y = np.concatenate(([0], duplicate_entries(v_p), [0]))
+    v_y = np.concatenate(([0], duplicate_entries(v_y_interior), [0]))
     return v_x, v_y
 
 
@@ -1197,8 +1205,9 @@ class GFigure:
         
         """
         v_hist, v_bin_edges = np.histogram(data, **hist_args)
+        density = hist_args.get("density", False)
 
-        v_x, v_y = hist_bin_edges_to_xy(v_hist, v_bin_edges)
+        v_x, v_y = hist_bin_edges_to_xy(v_hist, v_bin_edges, density=density)
         self.add_curve(v_x,
                        v_y,
                        *args,
