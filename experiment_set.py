@@ -76,15 +76,15 @@ class AbstractExperimentSet:
                 gsim_logger.info("The experiment returned no GFigures.")
             else:
                 cls._store_fig(l_G, experiment_id)
-                if no_plot:
+                if no_plot and not save_pdf:
                     gsim_logger.info(
-                        "Skipping plotting because `no_plot` is True."
-                    )
+                        "Skipping plotting because `no_plot` is True.")
                 else:
                     cls._plot_list_of_GFigure(l_G,
                                               save_pdf=save_pdf,
                                               experiment_id=experiment_id,
-                                              inspect=inspect)
+                                              inspect=inspect,
+                                              show=not no_plot)
 
         else:
             gsim_logger.error(
@@ -97,7 +97,8 @@ class AbstractExperimentSet:
                               l_G,
                               save_pdf=False,
                               experiment_id=None,
-                              inspect=False):
+                              inspect=False,
+                              show=True):
 
         if inspect:
             gsim_logger.info("The GFigures are available as `l_G`.")
@@ -129,10 +130,15 @@ class AbstractExperimentSet:
                 else:
                     file_name = f_name
                 G.export(target_folder + file_name)
-        plt.show()
+        if show:
+            plt.show()
 
     @classmethod
-    def plot_only(cls, experiment_id, save_pdf=False, inspect=False):
+    def plot_only(cls,
+                  experiment_id,
+                  save_pdf=False,
+                  inspect=False,
+                  no_plot=False):
 
         f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
         l_G = cls._load_fig(f_name)
@@ -144,7 +150,8 @@ class AbstractExperimentSet:
             cls._plot_list_of_GFigure(l_G,
                                       save_pdf=save_pdf,
                                       experiment_id=experiment_id,
-                                      inspect=inspect)
+                                      inspect=inspect,
+                                      show=not no_plot)
 
     @classmethod
     def experiment_set_data_folder(cls):
