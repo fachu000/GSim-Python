@@ -162,7 +162,11 @@ class TrainingHistory():
     def __init__(self):
         # The length of these lists equals the number of steps.
         self.l_train_loss_per_step = []  # Average loss for each batch
-        self.l_batch_length_per_step = []  # Needed to compute averages
+
+        # Number of loss values (i.e., entries of the vector returned by the
+        # loss function) that were used at each step. Needed to compute
+        # averages. See `usage.md`, Sec. "Multiple loss values per example".
+        self.l_num_loss_vals_per_step = []
         self.l_lr = []
 
         # List of indices where a training session started/resumed
@@ -189,6 +193,16 @@ class TrainingHistory():
         # most recent session are dropped via
         # `drop_reported_train_loss_me_steps_since_last_restored_checkpoint`.
         self.l_reported_train_loss_me_steps: list[int] = []
+
+    def __setstate__(self, state):
+        # Backwards compatibility: `l_batch_length_per_step` was renamed to
+        # `l_num_loss_vals_per_step`. Histories pickled before the rename carry
+        # the old attribute name, so map it onto the new one on load.
+        if ("l_num_loss_vals_per_step" not in state
+                and "l_batch_length_per_step" in state):
+            state["l_num_loss_vals_per_step"] = state.pop(
+                "l_batch_length_per_step")
+        self.__dict__.update(state)
 
     @property
     def ind_first_step_current_session(self):
@@ -506,14 +520,29 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         Args:
 
             `data`: typ. a tuple of two elements. The first is an input batch
-            and the second a target batch. 
+            and the second a target batch.
 
         If `unnormalize` is True, the unnormalized loss is returned. This is
         just the result of
              f_loss(
-                 unnormalize(self(input_batch)),
-                 unnormalize(target_batch)
-                 ).
+                 unnormalize(self(input_batch)), unnormalize(target_batch) ).
+
+        Returns:
+            A vector of length `num_loss_vals` entries. Usually, each example
+            (i.e., each of the `batch_size` input-target pairs in a batch)
+            produces one loss value. In that case, `num_loss_vals` equals the
+            batch size. The reason why the return value is a vector rather than
+            a scalar is so that each loss value can be weighted properly when
+            batches have different sizes. Note that this can happen even without
+            gradient accumulation, e.g., when the length of the dataset is not
+            an integer multiple of the batch size, so that the last batch is
+            smaller. 
+            
+            However, each example may produce multiple loss values. In that
+            case, `num_loss_vals` equals the total number of loss values
+            produced by all the examples in the batch in `data`. 
+
+            See `usage.md`, Sec. "Multiple loss values per example". 
         """
 
         assert f_loss is not None, "f_loss must be provided unless you override _get_loss."
@@ -525,44 +554,94 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         loss = f_loss(output_batch, targets_batch)
 
         if isinstance(targets_batch, torch.Tensor):
-            assert loss.shape[0] == targets_batch.shape[
-                0] and loss.ndim == 1, "f_loss must return a vector of length batch_size."
+            batch_size = targets_batch.shape[0]
+            if not (loss.ndim == 1 and loss.shape[0] >= batch_size):
+                gsim_logger.warning(
+                    "f_loss does not return a vector with at least one loss value "
+                    "per batch element. This may introduce bias in the training loss estimate "
+                    "if all batches do not have the same number of loss values. See usage.md."
+                )
         return loss
 
     def _run_training_step(self,
-                           batch,
+                           get_batch,
                            f_loss: LossFunType,
                            optimizer,
                            lr_scheduler=None,
-                           max_grad_norm=None):
+                           max_grad_norm=None,
+                           min_num_loss_vals_accumulate_grad=None):
         """
+        Performs a single training step, i.e., a single update of the network
+        weights. When `min_num_loss_vals_accumulate_grad` is provided, the
+        gradients of multiple batches are accumulated before the weight update,
+        which emulates training with a larger batch without the associated
+        memory cost (gradient accumulation).
+
         Args:
 
-            `optimizer` 
+            `get_batch`: a callable that returns a batch each time it is called.
+            It is invoked once per training step when
+            `min_num_loss_vals_accumulate_grad` is None, and possibly multiple
+            times otherwise (see below).
 
             `f_loss`: LossFunType
 
-            `lr_scheduler`: if provided, its step() method is invoked after
-            the optimizer step.
+            `optimizer`
+
+            `lr_scheduler`: if provided, its step() method is invoked after the
+            optimizer step.
 
             `max_grad_norm`: if provided, gradients are clipped to have maximum
             norm `max_grad_norm` during training.
 
+            `min_num_loss_vals_accumulate_grad`: if None (default), a single
+            batch is used per training step (no accumulation) and the behavior
+            is that of a standard training step. If an int is provided, batches
+            are fetched via `get_batch` and their gradients accumulated until
+            the total number of loss values seen in the step reaches this value;
+            only then is the optimizer step performed. The resulting gradient
+            equals the gradient of the mean loss across all the loss values used
+            in the step, exactly as if they formed a single batch. See
+            `usage.md`, Sec. "Multiple loss values per example". 
+
         Returns:
-            The vector of losses for the batch.
-        
+            The vector of loss values across all the batches used in the step.
+
         """
 
-        # Forward pass
-        v_loss = self._get_loss(batch, f_loss)  # vector of length batch_size
-        if self._diagnoser is not None:
-            self._diagnoser.check_forward(self, v_loss, batch, f_loss)
-
-        # Backward pass
         self.zero_grad()
-        torch.mean(v_loss).backward()
-        if self._diagnoser is not None:
-            self._diagnoser.check_backward(self, v_loss, batch, f_loss)
+
+        l_v_loss = []
+        num_loss_vals = 0
+        while True:
+            # Forward pass
+            batch = get_batch()
+            v_loss = self._get_loss(
+                batch, f_loss)  # vector of length num_loss_vals of this batch
+            if self._diagnoser is not None:
+                self._diagnoser.check_forward(self, v_loss, batch, f_loss)
+
+            # Backward pass. The sum (rather than the mean) of the loss values
+            # is used so that, after dividing by `num_loss_vals` below, the
+            # accumulated gradient equals the gradient of the mean loss over all
+            # the loss values used in the step, regardless of how many batches
+            # were accumulated or how many loss values each contained.
+            torch.sum(v_loss).backward()
+            if self._diagnoser is not None:
+                self._diagnoser.check_backward(self, v_loss, batch, f_loss)
+
+            l_v_loss.append(v_loss.detach())
+            num_loss_vals += len(v_loss)
+
+            if (min_num_loss_vals_accumulate_grad is None
+                    or num_loss_vals >= min_num_loss_vals_accumulate_grad):
+                break
+
+        # Turn the accumulated sum of gradients into the mean over all loss
+        # values.
+        for parameter in self.parameters():
+            if parameter.grad is not None:
+                parameter.grad /= num_loss_vals
 
         if max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_grad_norm)
@@ -572,14 +651,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         if lr_scheduler:
             lr_scheduler.step()
 
-        return v_loss.detach().cpu().numpy()
+        return torch.cat(l_v_loss).cpu().numpy()
 
     def _eval_static_metric(
         self,
         dataloader,
         f_loss: LossFunType,
         max_hci=None,
-        max_num_examples=None,
+        max_num_loss_vals=None,
         alpha: float = 0.05,
     ):
         """
@@ -592,11 +671,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `max_hci`: if not None, the computation stops when the half-width of
             the confidence interval (CI) is below this threshold.
 
-            `max_num_examples`: if not None, the computation stops after this
-            many examples have been processed. If the dataset has a length, this
-            is clamped to that length. If both `max_num_examples` and `max_hci`
-            are None after resolution (i.e. the dataset has no length and neither
-            argument is provided), a ValueError is raised.
+            `max_num_loss_vals`: if not None, the computation stops after this
+            many loss values (i.e., entries of the vector returned by
+            `_get_loss`) have been processed. If None and the dataset has a
+            length, the whole dataset is processed once. If both
+            `max_num_loss_vals` and `max_hci` are None and the dataset has no
+            length, a ValueError is raised.
 
             `alpha`: significance level for the CI (e.g. 0.05 for 95% CI)
 
@@ -607,24 +687,23 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         """
         dataset = dataloader.dataset
-        if isinstance(dataset, Sized):
-            n = len(dataset)
-            if max_num_examples is None:
-                max_num_examples = n
-            else:
-                max_num_examples = min(max_num_examples, n)
-
-        if max_num_examples is None and max_hci is None:
+        if (max_num_loss_vals is None and max_hci is None
+                and not isinstance(dataset, Sized)):
             raise ValueError(
                 "Evaluation of static metrics requires either a dataset with length, "
-                "(static_)max_num_examples, or (static_)max_hci.")
+                "(static_)max_num_loss_vals, or (static_)max_hci.")
 
+        # For a dataset with length, `max_num_loss_vals=None` means "process the
+        # whole dataset once", which is achieved by exhausting the dataloader
+        # (the loop below stops on StopIteration). No count limit is imposed in
+        # that case, so it works regardless of how many loss values each example
+        # produces.
         l_loss_vals = []
         num_batches = 0
         data_iter = iter(dataloader)
         while True:
-            if max_num_examples is not None and len(
-                    l_loss_vals) >= max_num_examples:
+            if max_num_loss_vals is not None and len(
+                    l_loss_vals) >= max_num_loss_vals:
                 break
             try:
                 data = next(data_iter)
@@ -633,8 +712,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             num_batches += 1
 
             with torch.no_grad():
-                loss = self._get_loss(data,
-                                      f_loss)  # vector of length batch_size
+                loss = self._get_loss(
+                    data,
+                    f_loss)  # vector of length num_loss_vals of the batch
 
             l_loss_vals += loss.detach().cpu().numpy().tolist()
 
@@ -642,7 +722,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 mean, hci = mean_and_ci(l_loss_vals, alpha=alpha)
                 if hci <= max_hci:
                     gsim_logger.info(
-                        f"    Target accuracy reached during metric evaluation after {num_batches} batches (used {len(l_loss_vals)} examples)."
+                        f"    Target accuracy reached during metric evaluation after {num_batches} batches (used {len(l_loss_vals)} loss values)."
                     )
                     return mean, hci
 
@@ -654,7 +734,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             mean, hci = mean_and_ci(l_loss_vals, alpha=alpha)
             if max_hci is not None:
                 gsim_logger.info(
-                    f"    Target accuracy not reached during metric evaluation (used {num_batches} batches, {len(l_loss_vals)} examples)."
+                    f"    Target accuracy not reached during metric evaluation (used {num_batches} batches, {len(l_loss_vals)} loss values)."
                 )
             return mean, hci
 
@@ -665,7 +745,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  no_targets=False,
                  unnormalized=True,
                  max_hci=None,
-                 max_num_examples=None):
+                 max_num_loss_vals=None):
         """
         Args:
 
@@ -676,10 +756,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `unnormalized`: If True, the unnormalized loss is returned. If no
             Normalizer is set, then the loss is already unnormalized.
 
-            `max_num_examples` (int | None): Maximum number of examples used to
-            estimate the loss. If the dataset has a length, this defaults to that
-            length (and is clamped to it if provided). For datasets without a
-            length, either `max_num_examples` or `max_hci` must be provided.
+            `max_num_loss_vals` (int | None): Maximum number of loss values
+            (i.e., entries of the vector returned by `_get_loss`) used to
+            estimate the loss. If the dataset has a length and this is None, the
+            whole dataset is processed once. For datasets without a length,
+            either `max_num_loss_vals` or `max_hci` must be provided.
 
         Returns a dict with key-values:
 
@@ -700,10 +781,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                            batch_size,
                                            no_targets=no_targets)
         self.eval()
-        loss, hci = self._eval_static_metric(dataloader,
-                                             f_loss=f_loss,
-                                             max_hci=max_hci,
-                                             max_num_examples=max_num_examples)
+        loss, hci = self._eval_static_metric(
+            dataloader,
+            f_loss=f_loss,
+            max_hci=max_hci,
+            max_num_loss_vals=max_num_loss_vals)
         return {"loss": loss, "hci": hci}
 
     class NeuralNetDataset(Dataset):
@@ -1078,11 +1160,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             restore_best_checkpoint=None,
             keep_best_val_weights=False,
             static_max_hci=None,
-            static_max_num_examples=None,
+            static_max_num_loss_vals=None,
             eval_unnormalized_losses=False,
             unnormalized_max_hci=None,
             obtain_static_training_loss=False,
             max_grad_norm: float | None = None,
+            min_num_loss_vals_accumulate_grad: int | None = None,
             live_plot=False,
             live_plot_interval=1000,
             num_significant_figures=4) -> TrainingHistory:
@@ -1128,7 +1211,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `dataset` (Dataset): The training dataset.
 
             `f_loss` (LossFunType): The loss function f_loss(output_batch,
-            target_batch). It should return a vector of shape (batch_size,).
+            target_batch). It is expected to return a vector of shape
+            (num_loss_values,), where num_loss_values is greater than or equal
+            to the batch size. The reason why the return value is a vector
+            rather than a scalar is so that each loss value can be weighted
+            properly when batches have different sizes, which can happen even
+            without gradient accumulation; cf. usage.mnd. 
 
             `optimizer`: The optimizer to use.
 
@@ -1243,11 +1331,13 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             is below this threshold, the metric evaluation stops early, which
             saves computation time.
 
-            `static_max_num_examples` (int | None): Maximum number of examples
-            used for static metric evaluations (static training loss, validation
-            loss, and unnormalized variants). Defaults to the dataset length
-            when the dataset is finite. For datasets without a length, either
-            this or `static_max_hci` must be provided.
+            `static_max_num_loss_vals` (int | None): Maximum number of loss
+            values (each batch element contributes at least one loss value; cf.
+            `usage.md`) used for static metric evaluations (static training
+            loss, validation loss, and unnormalized variants). When None, the
+            whole dataset is processed once (if the dataset is finite). For
+            datasets without a length, either this or `static_max_hci` must be
+            provided.
 
             `eval_unnormalized_losses` (bool): Whether to evaluate unnormalized
             losses. Default is False.
@@ -1262,6 +1352,19 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
             `max_grad_norm` (float | None): If provided, gradients are clipped
             to have maximum norm `max_grad_norm` during training.
+
+            `min_num_loss_vals_accumulate_grad` (int | None): If None (default),
+            each training step uses a single batch, as usual. If an int is
+            provided, gradient accumulation is enabled: at each training step,
+            batches are drawn and their gradients accumulated until the total
+            number of loss values (each batch element (example) contributes at
+            least one loss value; cf. usage.md) reaches this value, and only
+            then is the weight update performed. This emulates training with a
+            larger batch (of at least this many loss values) without the
+            associated memory cost. The batch size of each individual
+            forward/backward pass is still given by `batch_size`. Note that each
+            step thus consumes (generally) multiple batches, so `num_steps`
+            counts weight updates, not batches.
 
             `live_plot` (bool): If True, a live plot of the training history is
             shown during training.
@@ -1462,11 +1565,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 str_epoch = f"{ind_step / num_steps_per_epoch:.2f}"
             return f"Step {ind_step} (epoch {str_epoch})"
 
-        def eval_examples_per_second(hist: TrainingHistory):
+        def eval_loss_vals_per_second(hist: TrainingHistory):
             step_ind_start = hist.ind_first_step_current_session
-            examples_this_session = sum(
-                hist.l_batch_length_per_step[step_ind_start:])
-            return examples_this_session / total_time_training
+            loss_vals_this_session = sum(
+                hist.l_num_loss_vals_per_step[step_ind_start:])
+            return loss_vals_this_session / total_time_training
 
         def report_training_loss_me(ind_step, hist: TrainingHistory):
             hist.l_reported_train_loss_me_steps.append(ind_step)
@@ -1477,7 +1580,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 f"{get_log_step_str(ind_step)}: "
                 f"training loss me = {get_log_loss_str(l_reported, min_step_for_declaring_best=min_num_steps_reliable_train_loss_me)}, "
                 f"lr = {hist.l_lr[-1]:.2g}, "
-                f"{int(eval_examples_per_second(hist))} examples/s")
+                f"{int(eval_loss_vals_per_second(hist))} loss vals/s")
 
         def eval_static_metrics(ind_step, hist: TrainingHistory,
                                 dataloader_train_eval, dataloader_val):
@@ -1526,7 +1629,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     dataloader_train_eval,
                     f_loss,
                     max_hci=static_max_hci,
-                    max_num_examples=static_max_num_examples)
+                    max_num_loss_vals=static_max_num_loss_vals)
                 hist.l_train_loss += [(ind_step, m)]
                 l_str_log.append("train loss = " +
                                  get_log_loss_str(hist.l_train_loss, hci))
@@ -1536,7 +1639,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     dataloader_val,
                     f_loss,
                     max_hci=static_max_hci,
-                    max_num_examples=static_max_num_examples)
+                    max_num_loss_vals=static_max_num_loss_vals)
                 hist.l_val_loss += [(ind_step, m)]
                 l_str_log.append("val loss = " +
                                  get_log_loss_str(hist.l_val_loss, hci))
@@ -1550,7 +1653,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     dataloader_train_eval,
                     self.make_unnormalized_loss(f_loss),
                     max_hci=unnormalized_max_hci,
-                    max_num_examples=static_max_num_examples)
+                    max_num_loss_vals=static_max_num_loss_vals)
                 hist.l_unnormalized_train_loss += [(ind_step, m)]
                 l_str_log.append(
                     "unnormalized train loss = " +
@@ -1563,7 +1666,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     dataloader_val,
                     self.make_unnormalized_loss(f_loss),
                     max_hci=unnormalized_max_hci,
-                    max_num_examples=static_max_num_examples)
+                    max_num_loss_vals=static_max_num_loss_vals)
                 hist.l_unnormalized_val_loss += [(ind_step, m)]
                 l_str_log.append(
                     "unnormalized val loss = " +
@@ -1808,10 +1911,26 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                             interval=live_plot_interval,
                                             background=True)
 
+        # Batch provider for the training loop. A single call returns the next
+        # batch of `dataloader_train`, transparently starting a new epoch (which
+        # possibly reshuffles the data) when the current one is exhausted. This
+        # lets a training step draw one or several batches (see gradient
+        # accumulation in `_run_training_step`) without complicating the loop
+        # below.
+        data_iter = iter(dataloader_train)
+
+        def get_batch():
+            nonlocal data_iter
+            try:
+                return next(data_iter)
+            except StopIteration:
+                data_iter = iter(dataloader_train)
+                return next(data_iter)
+
         # Training loop
         done = False
         while not done:
-            for batch in dataloader_train:
+            while True:
 
                 if ind_step >= hist.ind_first_step_current_session + num_steps:
                     done = True
@@ -1821,10 +1940,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 self.train()
                 time_start_step = time.perf_counter()
                 v_loss_train_this_step = self._run_training_step(
-                    batch, f_loss, optimizer, lr_scheduler, max_grad_norm)
+                    get_batch, f_loss, optimizer, lr_scheduler, max_grad_norm,
+                    min_num_loss_vals_accumulate_grad)
                 total_time_training += time.perf_counter() - time_start_step
                 hist.l_train_loss_per_step += [v_loss_train_this_step.mean()]
-                hist.l_batch_length_per_step += [len(v_loss_train_this_step)]
+                hist.l_num_loss_vals_per_step += [len(v_loss_train_this_step)]
                 hist.l_lr.append(optimizer.param_groups[0]["lr"])
 
                 b_save_checkpoint = (num_steps_checkpoint is not None
@@ -2046,7 +2166,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                               first_step_to_plot=None,
                               logx=False,
                               logy=False,
-                              max_train_loss_me_points: int = 500):
+                              max_train_loss_me_points: int = 500,
+                              plot_num_loss_vals_per_step: bool = False):
         """
         Plots the training history of a neural network.
 
@@ -2065,11 +2186,19 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 Defaults to False.
             logy (bool, optional): If True, the y-axis uses a logarithmic scale.
                 Defaults to False.
+            plot_num_loss_vals_per_step (bool, optional): If True, an extra
+                subplot showing the number of loss values (cf. usage.md) used at
+                each training step (`hist.l_num_loss_vals_per_step`) is added to
+                the first figure. This is useful e.g. to inspect gradient
+                accumulation, where the number of loss values per step can
+                exceed the batch size. Defaults to False.
 
         Returns:
-            list[GFigure]: A list of GFigure objects. The first figure shows loss
+            list[GFigure]: A list of GFigure objects. The first figure shows
+            loss
                 curves (train_loss_me, train_loss, val_loss) and learning rate
-                evolution. Additional figures show unnormalized losses if available.
+                evolution. Additional figures show unnormalized losses if
+                available.
         """
 
         def split_data_by_session_history(l_x, l_y, l_session_steps,
@@ -2311,9 +2440,25 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             G.l_subplots = [plot_keys(l_label_data)]
             return G
 
+        def plot_num_loss_vals_per_step_subplot(G: GFigure):
+            """Appends a subplot showing the number of loss values used at each
+            training step to the figure `G`."""
+            s = Subplot(xlabel="Step",
+                        ylabel="Loss vals per step",
+                        sharex=True,
+                        logx=logx)
+            s.xlim = G.l_subplots[0].xlim
+            l_num_loss_vals = hist.l_num_loss_vals_per_step
+            s.add_curve(xaxis=list(range(len(l_num_loss_vals))),
+                        yaxis=l_num_loss_vals
+                        if len(l_num_loss_vals) > 0 else [np.nan])
+            G.l_subplots.append(s)
+
         l_G = []
 
         G1 = plot_loss_and_learning_rate()
+        if plot_num_loss_vals_per_step:
+            plot_num_loss_vals_per_step_subplot(G1)
         l_G.append(G1)
 
         G2 = plot_unnormalized_loss()

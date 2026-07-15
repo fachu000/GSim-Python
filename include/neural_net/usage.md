@@ -135,6 +135,44 @@ whenever `AdaptationSpec.preprocess_only=False` and
 correctly downstream, override `DataAdapter.get_no_targets` to return False in
 this case as well. 
 
+### Multiple loss values per example
+
+Throughout the framework, we distinguish between two concepts:
+
+- An **example** is a single pair (input, target), i.e., one item returned by
+  the dataset. A batch contains `batch_size` examples.
+- A **loss value** is one entry of the vector `f_loss(output_batch, target_batch)`. 
+
+The loss is returned as a vector, rather than a scalar, so that each loss value
+can be weighted properly (i.e., equally) when averaging, even when different
+batches contribute different numbers of loss values. Note that this happens even
+without gradient accumulation: if the dataset length is not an integer multiple
+of the batch size, the last batch of an epoch is smaller than the rest.
+
+Most often each example produces exactly one loss value, so the vector returned
+by `f_loss` has length `batch_size`. However, a single example may produce
+**multiple loss values**. For instance, consider a regression task `y = A @ x`,
+where each example is a pair `(y, A)` with `A` a matrix of `m` rows (a small
+linear system) and `y` a vector of `m` targets. Here a single example produces
+`m` loss values (one per row), and `m` may vary from example to example. See
+`experiment_1010` in `neuralnet_experiments.py` for a complete worked example.
+
+Because the statistically meaningful unit is the loss value (not the example),
+the arguments that budget or accumulate work are expressed in loss values:
+
+- `fit(..., min_num_loss_vals_accumulate_grad=N)`: gradient accumulation
+  aggregates batches until at least `N` loss values have been seen, and only
+  then performs the weight update. The resulting gradient equals that of the
+  mean loss over all the accumulated loss values, exactly as if they formed a
+  single batch.
+- `fit(..., static_max_num_loss_vals=N)` and `evaluate(...,
+  max_num_loss_vals=N)`: static-metric evaluation stops after `N` loss values.
+  When None, the whole (finite) dataset is processed once.
+- `plot_training_history(..., plot_num_loss_vals_per_step=True)`: adds a subplot
+  showing the number of loss values used at each training step (recorded in
+  `hist.l_num_loss_vals_per_step`), which is handy for inspecting gradient
+  accumulation.
+
 # Subclassing NeuralNet
 
 - Everything will work more smoothly if `forward` takes a single argument. This

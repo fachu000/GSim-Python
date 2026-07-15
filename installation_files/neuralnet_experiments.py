@@ -886,7 +886,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
     # Key differences from finite-dataset training:
     #   - num_steps is required (num_epochs cannot be used).
     #   - val_split must be None (default); a separate dataset_val is provided.
-    #   - static_max_num_examples bounds each static-metric evaluation pass,
+    #   - static_max_num_loss_vals bounds each static-metric evaluation pass,
     #     because the training stream has no natural stopping point.
     def experiment_1009(l_args):
         """Fit a small MLP to y = sin(2*pi*x) via an infinite data generator.
@@ -894,7 +894,7 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         The training IterableDataset generates fresh (x, y+noise) pairs on
         every iteration, so there is no epoch and no dataset length. Training
         uses num_steps=3000; validation loss is evaluated on a fixed finite set
-        every 300 steps, capped at static_max_num_examples=200 examples.
+        every 300 steps, capped at static_max_num_loss_vals=200 loss values.
 
         Returns two figures:
             1. Training curves (moving train loss and val loss vs. step).
@@ -969,7 +969,8 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             batch_size=32,
             num_steps_eval=300,
             num_steps_report_training_loss=150,
-            static_max_num_examples=200,  # cap each eval pass at 200 examples
+            static_max_num_loss_vals=
+            200,  # cap each eval pass at 200 loss values
             checkpoint_criterion='never',
             restore_best_checkpoint=False,
         )
@@ -992,3 +993,135 @@ class ExperimentSet(gsim.AbstractExperimentSet):
             legend=["sin(2πx)", "MLP estimate"],
         )
         return l_G + [G2]
+
+    # Gradient accumulation on the regression task y = A @ x.
+    #
+    # A single-layer linear perceptron is trained to recover `x_true` from a
+    # dataset of small linear systems (y, A) with a random number of rows. Here
+    # each example (i.e., each item of the dataset) is a pair (y, A), and it
+    # produces a variable number of loss values: one per row of the linear
+    # system. The batch size is 2 examples, but the number of loss values per
+    # batch is therefore variable. Gradient accumulation is enabled via
+    # `min_num_loss_vals_accumulate_grad`, so every optimizer step aggregates
+    # enough batches to reach at least that many loss values. The training
+    # history is plotted, including the number of loss values used at each step.
+    def experiment_1010(l_args):
+
+        class LinearSystemDataset(Dataset):
+            """Dataset for the regression task y = A @ x_true.
+
+            Each item (example) is a pair (y, A) representing a small linear
+            system with a *random* number of rows (equations). Concretely, item
+            i is
+
+                A_i:  (m_i, num_params) tensor with m_i drawn at random,
+                y_i:  (m_i, 1) tensor equal to A_i @ x_true (+ small noise),
+
+            so that different items contribute a different number of rows, i.e.,
+            a different number of loss values. This is precisely the setting in
+            which gradient accumulation by number of loss values is interesting:
+            the number of loss values per batch is variable.
+            """
+
+            def __init__(self,
+                         x_true: torch.Tensor,
+                         num_items: int = 400,
+                         min_rows: int = 1,
+                         max_rows: int = 8,
+                         noise_std: float = 0.01,
+                         seed: int = 0):
+                num_params = x_true.numel()
+                g = torch.Generator().manual_seed(seed)
+
+                self.l_A = []
+                self.l_y = []
+                for _ in range(num_items):
+                    m = int(
+                        torch.randint(min_rows,
+                                      max_rows + 1, (1, ),
+                                      generator=g).item())
+                    A = torch.randn(m, num_params, generator=g)
+                    noise = noise_std * torch.randn(m, 1, generator=g)
+                    y = A @ x_true.reshape(num_params, 1) + noise
+                    self.l_A.append(A)
+                    self.l_y.append(y)
+
+            def __len__(self):
+                return len(self.l_A)
+
+            def __getitem__(self, idx):
+                # Returns the pair (y, A) as requested.
+                return self.l_y[idx], self.l_A[idx]
+
+        class LinearPerceptron(NeuralNet):
+            """Single-layer linear perceptron with parameters `x`, computing A @ x.
+
+            The collate function is overridden to stack the y's and the A's of the
+            items in a batch separately (along their row dimension), producing a single
+            larger linear system per batch. It returns the batch as (input, target) =
+            (A_batch, y_batch), so that `NeuralNet` feeds A to `forward` and compares
+            the output against y.
+            """
+
+            def __init__(self, num_params: int, nn_folder=None):
+                super().__init__(nn_folder=nn_folder)
+                self.linear = nn.Linear(num_params, 1, bias=False)
+                self.initialize()
+
+            def forward(self, A: torch.Tensor) -> torch.Tensor:
+                return self.linear(A)
+
+            def collate_fn(self, l_batch, no_targets=False):
+                # `l_batch` is a list of (y_i, A_i) pairs. Stack the y's and the A's
+                # separately into larger tensors with the same number of dimensions.
+                l_y = [y for (y, A) in l_batch]
+                l_A = [A for (y, A) in l_batch]
+                y_batch = torch.cat(l_y, dim=0)  # (sum_i m_i, 1)
+                A_batch = torch.cat(l_A, dim=0)  # (sum_i m_i, num_params)
+                return A_batch, y_batch  # (input_batch, target_batch)
+
+        def _per_row_mse(output_batch: torch.Tensor,
+                         target_batch: torch.Tensor) -> torch.Tensor:
+            """Per-row squared error; returns one loss value per row (a vector
+            of length equal to the number of rows in the batch)."""
+            return ((output_batch - target_batch)**2).squeeze(-1)
+
+        torch.manual_seed(0)
+
+        x_true = torch.tensor([1.5, -2.0, 0.5])
+        num_params = x_true.numel()
+
+        dataset = LinearSystemDataset(x_true,
+                                      num_items=400,
+                                      min_rows=1,
+                                      max_rows=8,
+                                      noise_std=0.01,
+                                      seed=0)
+
+        net = LinearPerceptron(num_params)
+        optimizer = torch.optim.Adam(net.parameters(), lr=0.05)
+
+        hist = net.fit(
+            dataset,
+            _per_row_mse,
+            optimizer,
+            num_steps=300,
+            batch_size=2,
+            shuffle=True,
+            min_num_loss_vals_accumulate_grad=40,
+            num_steps_report_training_loss=50,
+            restore_best_checkpoint=False,
+        )
+
+        x_recovered = net.linear.weight.detach().cpu().reshape(-1)
+        print("True x       :", x_true.numpy())
+        print("Recovered x  :", x_recovered.numpy())
+        print("Final train loss (moving estimate):",
+              hist.compute_train_loss_me()[-1])
+
+        # In the bottom subfigure, we can see that some training steps have 52
+        # or 53 loss values. This may seem wrong, as max_rows = 8. However, the
+        # reason is that the batch size is 2. Thus, the maximum number of loss
+        # values per training step is 39 + 2 * 8 = 55.
+        return NeuralNet.plot_training_history(
+            hist, plot_num_loss_vals_per_step=True)

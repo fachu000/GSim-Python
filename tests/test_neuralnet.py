@@ -835,8 +835,8 @@ class TestIterableDatasetSupport:
                     shuffle=False,
                     restore_best_checkpoint=False)
 
-    def test_fit_iterable_with_static_max_num_examples(self):
-        """IterableDataset + static_max_num_examples evaluates val loss."""
+    def test_fit_iterable_with_static_max_num_loss_vals(self):
+        """IterableDataset + static_max_num_loss_vals evaluates val loss."""
         net = self._net()
         opt = self._opt(net)
         hist = net.fit(_IterableDataset(),
@@ -847,22 +847,22 @@ class TestIterableDatasetSupport:
                        dataset_val=self.VAL_DATASET,
                        checkpoint_criterion='never',
                        num_steps_eval=5,
-                       static_max_num_examples=6,
+                       static_max_num_loss_vals=6,
                        shuffle=False,
                        restore_best_checkpoint=False)
         assert len(hist.l_val_loss) > 0
 
-    def test_evaluate_iterable_with_max_num_examples(self):
-        """evaluate on IterableDataset with max_num_examples returns a finite loss."""
+    def test_evaluate_iterable_with_max_num_loss_vals(self):
+        """evaluate on IterableDataset with max_num_loss_vals returns a finite loss."""
         net = self._net()
         result = net.evaluate(_IterableDataset(),
                               batch_size=self.BATCH_SIZE,
                               f_loss=_mse,
-                              max_num_examples=15)
+                              max_num_loss_vals=15)
         assert np.isfinite(result["loss"])
 
     def test_evaluate_iterable_without_limit_raises(self):
-        """evaluate on IterableDataset without max_num_examples or max_hci raises."""
+        """evaluate on IterableDataset without max_num_loss_vals or max_hci raises."""
         net = self._net()
         with pytest.raises(ValueError):
             net.evaluate(_IterableDataset(),
