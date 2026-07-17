@@ -31,7 +31,7 @@ def _seed_worker(worker_id):
     np.random.seed(seed)
 
 
-from .defs import InputType, OutputType, TargetType, LossFunType
+from .defs import InputType, OutputType, TargetType, LossFunType, WeightedLoss
 from ...gfigure import Subplot
 
 try:
@@ -103,28 +103,31 @@ class Diagnoser(ABC):
     """
 
     @abstractmethod
-    def check_forward(self, model: 'NeuralNet', loss: torch.Tensor,
+    def check_forward(self, model: 'NeuralNet',
+                      loss: 'torch.Tensor | WeightedLoss',
                       data: tuple[InputType, TargetType], f_loss: LossFunType):
         """
-        This function is invoked right after a forward pass. 
+        This function is invoked right after a forward pass.
 
         Args:
-            
+
             `model`: instance of NeuralNet
 
-            `loss`: computed loss tensor. The result of running
-            model._get_loss(data, f_loss)
+            `loss`: the computed loss. The result of running
+            model._get_loss(data, f_loss), i.e., a tensor of loss values or a
+            WeightedLoss.
 
             `data`: typ. a tuple of two elements. The first is an input batch
-            and the second a target batch. 
+            and the second a target batch.
 
             `f_loss`: loss function
-        
+
         """
         pass
 
     @abstractmethod
-    def check_backward(self, model: 'NeuralNet', loss: torch.Tensor,
+    def check_backward(self, model: 'NeuralNet',
+                       loss: 'torch.Tensor | WeightedLoss',
                        data: tuple[InputType,
                                    TargetType], f_loss: LossFunType):
         """
@@ -528,21 +531,24 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  unnormalize(self(input_batch)), unnormalize(target_batch) ).
 
         Returns:
-            A vector of length `num_loss_vals` entries. Usually, each example
-            (i.e., each of the `batch_size` input-target pairs in a batch)
-            produces one loss value. In that case, `num_loss_vals` equals the
-            batch size. The reason why the return value is a vector rather than
-            a scalar is so that each loss value can be weighted properly when
+            This function returns what `f_loss` returns, i.e., either a vector
+            of `num_loss_vals` entries or a `WeightedLoss` whose `values` field
+            is a vector of `num_loss_vals` entries (see `usage.md`, Sec.
+            "Weighted loss values"). Usually, each example (i.e., each of the
+            `batch_size` input-target pairs in a batch) produces one loss value.
+            In that case, `num_loss_vals` equals the batch size. The reason why
+            the loss values are returned as a vector rather than in an aggregate
+            scalar is so that each loss value can be weighted properly when
             batches have different sizes. Note that this can happen even without
             gradient accumulation, e.g., when the length of the dataset is not
             an integer multiple of the batch size, so that the last batch is
-            smaller. 
-            
+            smaller.
+
             However, each example may produce multiple loss values. In that
             case, `num_loss_vals` equals the total number of loss values
-            produced by all the examples in the batch in `data`. 
+            produced by all the examples in the batch in `data`.
 
-            See `usage.md`, Sec. "Multiple loss values per example". 
+            See `usage.md`, Sec. "Multiple loss values per example".
         """
 
         assert f_loss is not None, "f_loss must be provided unless you override _get_loss."
@@ -553,14 +559,21 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         output_batch = self(input_batch)
         loss = f_loss(output_batch, targets_batch)
 
+        v_loss_vals = loss.values if isinstance(loss, WeightedLoss) else loss
+        assert v_loss_vals.ndim == 1, (
+            "f_loss must return a 1D tensor of loss values (or a WeightedLoss "
+            "whose `values` field is a 1D tensor), but the returned loss "
+            f"values have shape {tuple(v_loss_vals.shape)}. If each entry of "
+            "the returned tensor is a loss value, just flatten it (e.g. with "
+            ".squeeze(-1) or .flatten()). See usage.md.")
         if isinstance(targets_batch, torch.Tensor):
             batch_size = targets_batch.shape[0]
-            if not (loss.ndim == 1 and loss.shape[0] >= batch_size):
+            if v_loss_vals.shape[0] < batch_size:
                 gsim_logger.warning(
-                    "f_loss does not return a vector with at least one loss value "
-                    "per batch element. This may introduce bias in the training loss estimate "
-                    "if all batches do not have the same number of loss values. See usage.md."
-                )
+                    "f_loss returns fewer loss values than batch elements. "
+                    "This may introduce bias in the training loss estimate "
+                    "if all batches do not have the same number of loss values. "
+                    "See usage.md.")
         return loss
 
     def _run_training_step(self,
@@ -600,48 +613,61 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             are fetched via `get_batch` and their gradients accumulated until
             the total number of loss values seen in the step reaches this value;
             only then is the optimizer step performed. The resulting gradient
-            equals the gradient of the mean loss across all the loss values used
-            in the step, exactly as if they formed a single batch. See
-            `usage.md`, Sec. "Multiple loss values per example". 
+            equals the gradient of the (possibly weighted) mean loss across all
+            the loss values used in the step, exactly as if they formed a single
+            batch. See `usage.md`, Sec. "Multiple loss values per example".
 
         Returns:
-            The vector of loss values across all the batches used in the step.
+            `(loss_this_step, num_loss_vals)`: the weighted mean of the loss
+            values across all the batches used in the step (the plain mean when
+            `f_loss` returns unweighted tensors; cf. `usage.md`, Sec. "Weighted
+            loss values") and the number of loss values used in the step.
 
         """
 
         self.zero_grad()
 
-        l_v_loss = []
+        sum_weighted_loss = 0.0
+        sum_weights = 0.0
         num_loss_vals = 0
         while True:
             # Forward pass
             batch = get_batch()
-            v_loss = self._get_loss(
-                batch, f_loss)  # vector of length num_loss_vals of this batch
+            loss = self._get_loss(batch, f_loss)
+            v_loss, v_weights = WeightedLoss.ensure(
+                loss)  # vectors of length num_loss_vals of this batch
             if self._diagnoser is not None:
-                self._diagnoser.check_forward(self, v_loss, batch, f_loss)
+                self._diagnoser.check_forward(self, loss, batch, f_loss)
 
-            # Backward pass. The sum (rather than the mean) of the loss values
-            # is used so that, after dividing by `num_loss_vals` below, the
-            # accumulated gradient equals the gradient of the mean loss over all
-            # the loss values used in the step, regardless of how many batches
-            # were accumulated or how many loss values each contained.
-            torch.sum(v_loss).backward()
+            # Backward pass. The weighted sum (rather than the weighted mean) of
+            # the loss values is used so that, after dividing by the total sum
+            # of the weights below, the accumulated gradient equals the gradient
+            # of the weighted mean loss over all the loss values used in the
+            # step, regardless of how many batches were accumulated or how many
+            # loss values each contained. For plain (unweighted) losses, the
+            # weights are all ones and this reduces to the mean over all the
+            # loss values.
+            weighted_loss_sum = torch.sum(v_weights * v_loss)
+            weighted_loss_sum.backward()
             if self._diagnoser is not None:
-                self._diagnoser.check_backward(self, v_loss, batch, f_loss)
+                self._diagnoser.check_backward(self, loss, batch, f_loss)
 
-            l_v_loss.append(v_loss.detach())
+            sum_weighted_loss += float(weighted_loss_sum.detach())
+            sum_weights += float(v_weights.sum())
             num_loss_vals += len(v_loss)
 
             if (min_num_loss_vals_accumulate_grad is None
                     or num_loss_vals >= min_num_loss_vals_accumulate_grad):
                 break
 
-        # Turn the accumulated sum of gradients into the mean over all loss
-        # values.
+        # Turn the accumulated sum of gradients into the weighted mean over all
+        # loss values.
+        assert sum_weights > 0, (
+            "The weights returned by f_loss in this training step sum to 0, so "
+            "the weighted mean loss is undefined.")
         for parameter in self.parameters():
             if parameter.grad is not None:
-                parameter.grad /= num_loss_vals
+                parameter.grad /= sum_weights
 
         if max_grad_norm is not None:
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_grad_norm)
@@ -651,7 +677,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         if lr_scheduler:
             lr_scheduler.step()
 
-        return torch.cat(l_v_loss).cpu().numpy()
+        return sum_weighted_loss / sum_weights, num_loss_vals
 
     def _eval_static_metric(
         self,
@@ -662,7 +688,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         alpha: float = 0.05,
     ):
         """
-        Averages f_loss across the dataset.
+        Averages f_loss across the dataset. If `f_loss` returns `WeightedLoss`
+        objects, the weighted mean of the loss values is computed instead of the
+        plain mean; cf. `usage.md`, Sec. "Weighted loss values".
 
         Args:
 
@@ -699,6 +727,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         # that case, so it works regardless of how many loss values each example
         # produces.
         l_loss_vals = []
+        l_weights = []
         num_batches = 0
         data_iter = iter(dataloader)
         while True:
@@ -712,14 +741,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             num_batches += 1
 
             with torch.no_grad():
-                loss = self._get_loss(
-                    data,
-                    f_loss)  # vector of length num_loss_vals of the batch
+                v_loss, v_weights = WeightedLoss.ensure(
+                    self._get_loss(data, f_loss)
+                )  # vectors of length num_loss_vals of the batch
 
-            l_loss_vals += loss.detach().cpu().numpy().tolist()
+            l_loss_vals += v_loss.detach().cpu().numpy().tolist()
+            l_weights += v_weights.cpu().numpy().tolist()
 
             if max_hci is not None and len(l_loss_vals) >= 2:
-                mean, hci = mean_and_ci(l_loss_vals, alpha=alpha)
+                mean, hci = mean_and_ci(l_loss_vals,
+                                        alpha=alpha,
+                                        weights=l_weights)
                 if hci <= max_hci:
                     gsim_logger.info(
                         f"    Target accuracy reached during metric evaluation after {num_batches} batches (used {len(l_loss_vals)} loss values)."
@@ -731,7 +763,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         elif len(l_loss_vals) == 1:
             return l_loss_vals[0], np.nan
         else:
-            mean, hci = mean_and_ci(l_loss_vals, alpha=alpha)
+            mean, hci = mean_and_ci(l_loss_vals,
+                                    alpha=alpha,
+                                    weights=l_weights)
             if max_hci is not None:
                 gsim_logger.info(
                     f"    Target accuracy not reached during metric evaluation (used {num_batches} batches, {len(l_loss_vals)} loss values)."
@@ -764,7 +798,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         Returns a dict with key-values:
 
-        "loss": the result of averaging `f_loss` across `dataset`.
+        "loss": the result of averaging `f_loss` across `dataset`. If `f_loss`
+        returns `WeightedLoss` objects, this is the weighted mean of the loss
+        values; cf. `usage.md`, Sec. "Weighted loss values".
 
         "hci": half-width of the confidence interval (CI) for the loss.
         """
@@ -1211,12 +1247,23 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `dataset` (Dataset): The training dataset.
 
             `f_loss` (LossFunType): The loss function f_loss(output_batch,
-            target_batch). It is expected to return a vector of shape
-            (num_loss_values,), where num_loss_values is greater than or equal
-            to the batch size. The reason why the return value is a vector
-            rather than a scalar is so that each loss value can be weighted
-            properly when batches have different sizes, which can happen even
-            without gradient accumulation; cf. usage.mnd. 
+            target_batch). It is expected to return either 
+                
+                - a 1D tensor of shape (num_loss_values,), where num_loss_values
+                  is typically equal to the batch size (but can be greater; cf.
+                  `usage.md`, Sec. "Multiple loss values per example"), or 
+                
+                - an object of class `WeightedLoss` whose `values` field is a 1D
+                  tensor of shape (num_loss_values,). 
+                  
+            The reason why the loss values are returned as a vector rather than
+            as a single aggregate scalar is so that each loss value can be
+            weighted properly when batches have different sizes, which can
+            happen even without gradient accumulation; cf. `usage.md`, Secs.
+            "Multiple loss values per example" and "Weighted loss values". When
+            a `WeightedLoss` is returned, all loss aggregations (training steps
+            and static metric evaluations) compute the weighted mean of the loss
+            values instead of the plain mean.
 
             `optimizer`: The optimizer to use.
 
@@ -1939,12 +1986,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 # Training step
                 self.train()
                 time_start_step = time.perf_counter()
-                v_loss_train_this_step = self._run_training_step(
+                loss_train_this_step, num_loss_vals_this_step = self._run_training_step(
                     get_batch, f_loss, optimizer, lr_scheduler, max_grad_norm,
                     min_num_loss_vals_accumulate_grad)
                 total_time_training += time.perf_counter() - time_start_step
-                hist.l_train_loss_per_step += [v_loss_train_this_step.mean()]
-                hist.l_num_loss_vals_per_step += [len(v_loss_train_this_step)]
+                hist.l_train_loss_per_step += [loss_train_this_step]
+                hist.l_num_loss_vals_per_step += [num_loss_vals_this_step]
                 hist.l_lr.append(optimizer.param_groups[0]["lr"])
 
                 b_save_checkpoint = (num_steps_checkpoint is not None

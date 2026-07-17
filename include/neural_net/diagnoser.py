@@ -6,22 +6,42 @@ such as NaN or Inf values in gradients and intermediate outputs.
 import logging
 import os
 import tempfile
+from typing import Any
 import numpy as np
 import torch
 from torch import nn
-from pyparsing import Callable, Any
 from torch import Tensor
-from gsim.include.neural_net.defs import InputType, LossFunType, TargetType
+from gsim.include.neural_net.defs import InputType, LossFunType, TargetType, WeightedLoss
 from gsim.include.neural_net.neural_net import Diagnoser, NeuralNet
 from gsim.gfigure import GFigure
 
 logger = logging.getLogger("gsim")
 
+
+def _loss_values(loss) -> torch.Tensor:
+    """Returns the vector of loss values, discarding the weights when `loss` is
+    a WeightedLoss. Use only for element-wise inspections (e.g. NaN/Inf
+    checks); aggregations must use `_loss_mean` so that bugs in the weights are
+    not concealed."""
+    return loss.values if isinstance(loss, WeightedLoss) else loss
+
+
+def _loss_mean(loss) -> torch.Tensor:
+    """Returns the mean of the loss values: the weighted mean when `loss` is a
+    WeightedLoss and the plain mean otherwise. This is the quantity that
+    NeuralNet optimizes, so the diagnostics in this module aggregate the loss
+    with this function; in particular, bugs in the weights (e.g. NaN or
+    all-zero weights) surface in the diagnosed loss."""
+    if isinstance(loss, WeightedLoss):
+        return torch.sum(loss.weights * loss.values) / torch.sum(loss.weights)
+    return torch.mean(loss)
+
+
 # Forward passes ###########################################################
 
 
-def do_log_forward(model: nn.Module, loss: torch.Tensor):
-    loss_this_batch = torch.mean(loss).item()
+def do_log_forward(model: nn.Module, loss: 'torch.Tensor | WeightedLoss'):
+    loss_this_batch = _loss_mean(loss).item()
 
     all_params = []
     for _, param in model.named_parameters():
@@ -192,10 +212,11 @@ def do_check_repeated_gradient_computation(
     loss = model._get_loss(data, f_loss)
     loss = model._get_loss(data, f_loss)
     model.zero_grad()
+    v_loss_vals = _loss_values(loss)
     logger.info(
-        f"First loss: {torch.mean(loss).item():.6f}, has_nan={torch.isnan(loss).any()}, has_inf={torch.isinf(loss).any()}"
+        f"First loss: {_loss_mean(loss).item():.6f}, has_nan={torch.isnan(v_loss_vals).any()}, has_inf={torch.isinf(v_loss_vals).any()}"
     )
-    torch.mean(loss).backward()
+    _loss_mean(loss).backward()
 
     # Save gradients for comparison
     gradients_1 = {
@@ -206,10 +227,11 @@ def do_check_repeated_gradient_computation(
     # Second gradient computation
     model.zero_grad()
     loss = model._get_loss(data, f_loss)
+    v_loss_vals = _loss_values(loss)
     logger.info(
-        f"Second loss: {torch.mean(loss).item():.6f}, has_nan={torch.isnan(loss).any()}, has_inf={torch.isinf(loss).any()}"
+        f"Second loss: {_loss_mean(loss).item():.6f}, has_nan={torch.isnan(v_loss_vals).any()}, has_inf={torch.isinf(v_loss_vals).any()}"
     )
-    torch.mean(loss).backward()
+    _loss_mean(loss).backward()
 
     # Check if recomputed gradients differ
     logger.info("Comparing original vs recomputed gradients:")
@@ -300,7 +322,7 @@ def do_plot_gradient_histograms(
     # Obtain the gradients
     model.zero_grad()
     loss = model._get_loss(data, f_loss)
-    torch.mean(loss).backward()
+    _loss_mean(loss).backward()
 
     l_G: list[GFigure] = []
 
@@ -346,7 +368,7 @@ def do_plot_gradient_histogram(model: 'NeuralNet',
     # Obtain the gradients
     model.zero_grad()
     loss = model._get_loss(data, f_loss)
-    torch.mean(loss).backward()
+    _loss_mean(loss).backward()
 
     all_grads = []
 
@@ -404,8 +426,7 @@ def do_plot_loss_vs_parameter_with_greatest_gradient_abs(
 
     # Compute gradients
     model.zero_grad()
-    loss_0 = model._get_loss(data, f_loss)
-    loss_0_mean = torch.mean(loss_0)
+    loss_0_mean = _loss_mean(model._get_loss(data, f_loss))
     loss_0_mean.backward()
 
     # Find parameter with greatest absolute gradient
@@ -463,8 +484,7 @@ def do_plot_loss_vs_parameter_with_greatest_gradient_abs(
 
         # Compute loss
         with torch.no_grad():
-            loss = model._get_loss(data, f_loss)
-            loss_mean = torch.mean(loss).item()
+            loss_mean = _loss_mean(model._get_loss(data, f_loss)).item()
             v_loss_actual.append(loss_mean)
 
         # Linear approximation: f(0) + delta * grad
@@ -503,7 +523,7 @@ def do_plot_loss_vs_parameter_with_greatest_gradient_abs(
 # Saving logic ###########################################################
 
 
-def save_snapshot(model: 'NeuralNet', loss: torch.Tensor,
+def save_snapshot(model: 'NeuralNet', loss: 'torch.Tensor | WeightedLoss',
                   data: tuple[InputType, TargetType], results: dict[str, Any]):
     if model.nn_folder is not None:
         folder = os.path.join(model.nn_folder, 'diagnosing')
@@ -572,15 +592,16 @@ def load_snapshot(snapshot_spec: int | str,
     }
 
 
-def reproduce_from_snapshot(snapshot_spec: int | str, model: 'NeuralNet',
-                            f_loss: LossFunType) -> torch.Tensor:
+def reproduce_from_snapshot(
+        snapshot_spec: int | str, model: 'NeuralNet',
+        f_loss: LossFunType) -> 'torch.Tensor | WeightedLoss':
     snapshot = load_snapshot(snapshot_spec, model)
     data = snapshot['data']
 
     # Perform a forward and a backward pass to reproduce the issue
     model.zero_grad()
     loss = model._get_loss(data, f_loss)
-    torch.mean(loss).backward()
+    _loss_mean(loss).backward()
 
     return loss
 
@@ -657,7 +678,8 @@ class StandardDiagnoser(Diagnoser):
         self.num_points__loss_vs_parameter_with_greatest_gradient_abs = num_points_loss_vs_parameter_with_greatest_gradient_abs
         self.delta_range__loss_vs_parameter_with_greatest_gradient_abs = delta_range_loss_vs_parameter_with_greatest_gradient_abs
 
-    def check_forward(self, model: 'NeuralNet', loss: torch.Tensor,
+    def check_forward(self, model: 'NeuralNet',
+                      loss: 'torch.Tensor | WeightedLoss',
                       data: tuple[InputType, TargetType], f_loss: LossFunType):
         """
         This method is run after every forward pass (batch).
@@ -678,7 +700,8 @@ class StandardDiagnoser(Diagnoser):
 
         return
 
-    def check_backward(self, model: 'NeuralNet', loss: torch.Tensor,
+    def check_backward(self, model: 'NeuralNet',
+                       loss: 'torch.Tensor | WeightedLoss',
                        data: tuple[InputType,
                                    TargetType], f_loss: LossFunType):
         """

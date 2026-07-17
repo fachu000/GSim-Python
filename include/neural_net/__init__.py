@@ -1,4 +1,4 @@
-from .defs import InputType, OutputType, TargetType, LossFunType, RawInputType
+from .defs import InputType, OutputType, TargetType, LossFunType, RawInputType, WeightedLoss
 from .datasets import AdaptedDataset, AdaptedIterableDataset, AdaptedSizedDataset
 from .neural_net import NeuralNet, TrainingHistory
 from .data_adapter import DataAdapter

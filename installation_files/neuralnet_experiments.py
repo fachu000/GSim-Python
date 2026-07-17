@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 import gsim
 from gsim.gfigure import GFigure
-from gsim.include.neural_net import NeuralNet, WarmupCosineMinLRScheduler
+from gsim.include.neural_net import NeuralNet, WarmupCosineMinLRScheduler, WeightedLoss
 from gsim.include.neural_net.data_adapter import AdaptationSpec, DataAdapter
 from gsim.include.neural_net.normalizers import (
     MultiFeatNormalizer,
@@ -1123,5 +1123,163 @@ class ExperimentSet(gsim.AbstractExperimentSet):
         # or 53 loss values. This may seem wrong, as max_rows = 8. However, the
         # reason is that the batch size is 2. Thus, the maximum number of loss
         # values per training step is 39 + 2 * 8 = 55.
+        return NeuralNet.plot_training_history(
+            hist, plot_num_loss_vals_per_step=True)
+
+    # Same task as experiment 1010, but each linear system (example) is
+    # weighted equally in the loss regardless of its number of rows. To this
+    # end, the loss function returns a WeightedLoss object whose weights are
+    # 1/m_i for each of the m_i rows of the i-th system in the batch. With
+    # these weights, all the loss aggregations performed by NeuralNet
+    # (training steps, including gradient accumulation, and static metric
+    # evaluations) compute the weighted mean of the loss values, which here
+    # equals the average across systems of the per-system mean squared error.
+    # A validation dataset is provided so that the validation loss (also a
+    # weighted mean) is plotted. At the end, `NeuralNet.evaluate` is invoked on
+    # the validation dataset and its result is cross-checked against a manual
+    # computation of the weighted validation loss. See `usage.md`, Sec.
+    # "Weighted loss values".
+    #
+    # Unlike in experiment 1010, the systems in a batch are not concatenated
+    # into a single large system: the collate function returns a list of A
+    # matrices as the input batch and a list of y vectors as the target batch,
+    # and `forward` processes the systems in a loop. This is more general (it
+    # works even when the examples cannot be concatenated into a tensor) and it
+    # lets the loss function obtain the size of each system directly from the
+    # targets, so no side information needs to be passed through the batch.
+    def experiment_1011(l_args):
+
+        class LinearSystemDataset(Dataset):
+            """Same dataset as in experiment 1010: each item (example) is a
+            pair (y, A) representing a small linear system y = A @ x_true (+
+            small noise) with a *random* number of rows."""
+
+            def __init__(self,
+                         x_true: torch.Tensor,
+                         num_items: int = 400,
+                         min_rows: int = 1,
+                         max_rows: int = 8,
+                         noise_std: float = 0.01,
+                         seed: int = 0):
+                num_params = x_true.numel()
+                g = torch.Generator().manual_seed(seed)
+
+                self.l_A = []
+                self.l_y = []
+                for _ in range(num_items):
+                    m = int(
+                        torch.randint(min_rows,
+                                      max_rows + 1, (1, ),
+                                      generator=g).item())
+                    A = torch.randn(m, num_params, generator=g)
+                    noise = noise_std * torch.randn(m, 1, generator=g)
+                    y = A @ x_true.reshape(num_params, 1) + noise
+                    self.l_A.append(A)
+                    self.l_y.append(y)
+
+            def __len__(self):
+                return len(self.l_A)
+
+            def __getitem__(self, idx):
+                return self.l_y[idx], self.l_A[idx]
+
+        class LinearPerceptron(NeuralNet):
+            """Same network as in experiment 1010, except that the batches are
+            kept as lists: the input batch is a list of A matrices and the
+            target batch is a list of y vectors, so `forward` processes the
+            systems in a loop instead of a single matrix product."""
+
+            def __init__(self, num_params: int, nn_folder=None):
+                super().__init__(nn_folder=nn_folder)
+                self.linear = nn.Linear(num_params, 1, bias=False)
+                self.initialize()
+
+            def forward(self, l_A: list) -> list:
+                # `l_A` is a list of (m_i, num_params) matrices. Returns a list
+                # of (m_i, 1) prediction vectors.
+                return [self.linear(A) for A in l_A]
+
+            def collate_fn(self, l_batch, no_targets=False):
+                # `l_batch` is a list of (y_i, A_i) pairs. Just regroup them
+                # into a list of inputs and a list of targets.
+                l_y = [y for (y, A) in l_batch]
+                l_A = [A for (y, A) in l_batch]
+                return l_A, l_y
+
+        def _per_row_weighted_mse(l_output, l_targets) -> WeightedLoss:
+            """Per-row squared error with weight 1/m_i for the rows of the i-th
+            system, so that each system contributes equally to the loss: the
+            weighted mean of the loss values equals the average across systems
+            of the per-system mean squared error. The number of rows of each
+            system is obtained from the targets themselves."""
+            v_vals = torch.cat([((m_pred - y)**2).squeeze(-1)
+                                for m_pred, y in zip(l_output, l_targets)])
+            v_weights = torch.cat([
+                torch.full((y.shape[0], ),
+                           1.0 / y.shape[0],
+                           device=v_vals.device) for y in l_targets
+            ])
+            return WeightedLoss(values=v_vals, weights=v_weights)
+
+        torch.manual_seed(0)
+
+        x_true = torch.tensor([1.5, -2.0, 0.5])
+        num_params = x_true.numel()
+
+        dataset_train = LinearSystemDataset(x_true,
+                                            num_items=400,
+                                            min_rows=1,
+                                            max_rows=8,
+                                            noise_std=0.01,
+                                            seed=0)
+        dataset_val = LinearSystemDataset(x_true,
+                                          num_items=100,
+                                          min_rows=1,
+                                          max_rows=8,
+                                          noise_std=0.01,
+                                          seed=1)
+
+        net = LinearPerceptron(num_params)
+        optimizer = torch.optim.Adam(net.parameters(), lr=0.05)
+
+        hist = net.fit(
+            dataset_train,
+            _per_row_weighted_mse,
+            optimizer,
+            num_steps=300,
+            batch_size=2,
+            shuffle=True,
+            dataset_val=dataset_val,
+            num_steps_eval=50,
+            min_num_loss_vals_accumulate_grad=40,
+            num_steps_report_training_loss=50,
+            restore_best_checkpoint=False,
+        )
+
+        # Evaluate the (weighted) validation loss with NeuralNet.evaluate and
+        # cross-check it against a manual computation of the average across
+        # systems of the per-system mean squared error.
+        d_eval = net.evaluate(dataset_val,
+                              batch_size=2,
+                              f_loss=_per_row_weighted_mse)
+
+        net.eval()
+        with torch.no_grad():
+            l_per_system_mse = []
+            for ind_item in range(len(dataset_val)):
+                y, A = dataset_val[ind_item]
+                m_pred = net([A.float().to(net.device_type)])[0].cpu()
+                l_per_system_mse.append(torch.mean((m_pred - y)**2).item())
+        manual_val_loss = float(np.mean(l_per_system_mse))
+
+        x_recovered = net.linear.weight.detach().cpu().reshape(-1)
+        print("True x       :", x_true.numpy())
+        print("Recovered x  :", x_recovered.numpy())
+        print(f"evaluate: val loss = {d_eval['loss']:.6g} ± "
+              f"{d_eval['hci']:.6g}")
+        print(f"manual  : val loss = {manual_val_loss:.6g}")
+        assert np.isclose(d_eval['loss'], manual_val_loss, rtol=1e-4), \
+            "NeuralNet.evaluate does not match the manual weighted loss."
+
         return NeuralNet.plot_training_history(
             hist, plot_num_loss_vals_per_step=True)

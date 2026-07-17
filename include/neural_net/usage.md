@@ -143,11 +143,12 @@ Throughout the framework, we distinguish between two concepts:
   the dataset. A batch contains `batch_size` examples.
 - A **loss value** is one entry of the vector `f_loss(output_batch, target_batch)`. 
 
-The loss is returned as a vector, rather than a scalar, so that each loss value
-can be weighted properly (i.e., equally) when averaging, even when different
-batches contribute different numbers of loss values. Note that this happens even
-without gradient accumulation: if the dataset length is not an integer multiple
-of the batch size, the last batch of an epoch is smaller than the rest.
+The loss is returned as a 1D vector, rather than a scalar, so that each loss
+value can be weighted properly (i.e., equally) when averaging, even when
+different batches contribute different numbers of loss values. Note that this
+happens even without gradient accumulation: if the dataset length is not an
+integer multiple of the batch size, the last batch of an epoch is smaller than
+the rest.
 
 Most often each example produces exactly one loss value, so the vector returned
 by `f_loss` has length `batch_size`. However, a single example may produce
@@ -172,6 +173,48 @@ the arguments that budget or accumulate work are expressed in loss values:
   showing the number of loss values used at each training step (recorded in
   `hist.l_num_loss_vals_per_step`), which is handy for inspecting gradient
   accumulation.
+
+### Weighted loss values
+
+By default, all loss values are weighted equally: the loss that the optimizer
+sees at each training step is the plain mean of the loss values across all the
+batches used in that step. However, a different weighting is needed sometimes.
+For example, when each example produces a variable number of loss values (cf.
+the previous section), one may want every *example* to contribute equally to the
+loss, regardless of how many loss values it produces.
+
+To this end, the loss function may return, instead of a 1D tensor, an object of
+class `WeightedLoss` (cf. `defs.py`):
+
+```python
+from gsim.include.neural_net import WeightedLoss
+
+def f_loss(output_batch, target_batch) -> WeightedLoss:
+    ...
+    return WeightedLoss(values=v_loss_vals, weights=v_weights)
+```
+
+where `values` and `weights` are 1D tensors of the same length. In that case,
+every loss aggregation computes the weighted mean
+
+    sum_i weights[i] * values[i] / sum_i weights[i]
+
+instead of the plain mean. 
+
+Notes:
+
+- Returning a 1D tensor is equivalent to returning a `WeightedLoss` with unit
+  weights.
+- The confidence intervals treat the (value, weight) pairs as i.i.d. When the
+  loss values of one example share a weight (e.g. `1/m` for an example with `m`
+  loss values), they are correlated and the reported CI is approximate. This
+  caveat already applies to the unweighted CI whenever an example produces
+  multiple loss values.
+
+See `experiment_1011` in `neuralnet_experiments.py` for a complete worked
+example, where each example of `experiment_1010` (a small linear system with a
+random number of rows) is weighted by the reciprocal of its number of rows so
+that all the linear systems contribute equally to the loss.
 
 # Subclassing NeuralNet
 
