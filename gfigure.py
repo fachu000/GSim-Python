@@ -295,7 +295,8 @@ class Curve:
                  style=None,
                  mode=None,
                  legend_str="",
-                 aspect=None):
+                 aspect=None,
+                 secondary_y=False):
         """
 
         See GFigure.__init__ for more information.
@@ -410,6 +411,7 @@ class Curve:
         self.yupper = yupper
         self.style = style
         self.legend_str = legend_str
+        self.secondary_y = secondary_y
 
         # 3D
         self.zaxis = zaxis
@@ -620,21 +622,25 @@ class Subplot:
                  title="",
                  xlabel="",
                  ylabel="",
+                 secondary_ylabel="",
                  zlabel="",
                  color_bar=False,
                  grid=True,
                  xlim=None,
                  ylim=None,
+                 secondary_ylim=None,
                  zlim=None,
                  xticks=None,
                  num_xticks_decimal_places=None,
                  yticks=None,
+                 secondary_yticks=None,
                  legend_loc=None,
                  create_curves=True,
                  num_legend_cols=1,
                  sharex=None,
                  logx=False,
                  logy=False,
+                 secondary_logy=False,
                  **kwargs):
         """
       For a description of the arguments, see GFigure.__init__
@@ -644,22 +650,27 @@ class Subplot:
         self.title = title
         self.xlabel = xlabel
         self.ylabel = ylabel
+        self.secondary_ylabel = secondary_ylabel
         self.zlabel = zlabel
         self.color_bar = color_bar
         self.grid = grid
         self.xlim = xlim
         self.ylim = ylim
+        self.secondary_ylim = secondary_ylim
         self.zlim = zlim
         self.xticks = xticks
         self.num_xticks_decimal_places = num_xticks_decimal_places
         self.yticks = yticks
+        self.secondary_yticks = secondary_yticks
         self.legend_loc = legend_loc
         self.num_legend_cols = num_legend_cols
         self.l_curves: list[Curve] = []
         self.sharex = sharex
         self.logx = logx
         self.logy = logy
+        self.secondary_logy = secondary_logy
         self.axes: Axes | None = None  # Handle to the subplot axis
+        self.secondary_axes: Axes | None = None
         if create_curves:
             self.add_curve(**kwargs)
 
@@ -668,7 +679,10 @@ class Subplot:
 
     def is_empty(self):
 
-        return not any([self.title, self.xlabel, self.ylabel, self.l_curves])
+        return not any([
+            self.title, self.xlabel, self.ylabel, self.secondary_ylabel,
+            self.l_curves
+        ])
 
     def update_properties(self, **kwargs):
 
@@ -680,6 +694,14 @@ class Subplot:
             self.ylabel = kwargs["ylabel"]
         if "zlabel" in kwargs:
             self.ylabel = kwargs["zlabel"]
+        if "secondary_ylabel" in kwargs:
+            self.secondary_ylabel = kwargs["secondary_ylabel"]
+        if "secondary_ylim" in kwargs:
+            self.secondary_ylim = kwargs["secondary_ylim"]
+        if "secondary_yticks" in kwargs:
+            self.secondary_yticks = kwargs["secondary_yticks"]
+        if "secondary_logy" in kwargs:
+            self.secondary_logy = kwargs["secondary_logy"]
 
     def add_curve(self,
                   xaxis=[],
@@ -691,20 +713,23 @@ class Subplot:
                   styles=[],
                   mode=None,
                   legend=tuple(),
-                  aspect=None):
+                  aspect=None,
+                  secondary_y=False):
         """
       Adds one or multiple curves to `self`. See documentation of GFigure.__init__
       """
 
         if zaxis is None:
             # 2D figure
-            self.l_curves += Subplot._l_2D_curves_from_input_args(xaxis,
-                                                                  yaxis,
-                                                                  ylower,
-                                                                  yupper,
-                                                                  styles,
-                                                                  legend,
-                                                                  mode=mode)
+            self.l_curves += Subplot._l_2D_curves_from_input_args(
+                xaxis,
+                yaxis,
+                ylower,
+                yupper,
+                styles,
+                legend,
+                mode=mode,
+                secondary_y=secondary_y)
         else:
             # 3D figure
             self.l_curves.append(
@@ -713,13 +738,20 @@ class Subplot:
                       zaxis=zaxis,
                       zinterpolation=zinterpolation,
                       mode=mode,
-                      aspect=aspect))
+                      aspect=aspect,
+                      secondary_y=secondary_y))
 
     def add_vertical_lines(self, *args, **kwargs):
         self.l_curves.append(VerticalLinesCurve(subplot=self, *args, **kwargs))
 
-    def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
-                                     legend, mode):
+    def _l_2D_curves_from_input_args(xaxis,
+                                     yaxis,
+                                     ylower,
+                                     yupper,
+                                     styles,
+                                     legend,
+                                     mode,
+                                     secondary_y=False):
 
         def expand_default_xaxes(l_xaxis, l_yaxis):
             """
@@ -821,7 +853,8 @@ class Subplot:
                       yupper=yup,
                       style=stl,
                       legend_str=leg,
-                      mode=mode))
+                      mode=mode,
+                      secondary_y=secondary_y))
         return l_curve
 
     def _list_from_style_argument(style_arg):
@@ -963,22 +996,60 @@ class Subplot:
         else:
             regenerating = True
 
-        for curve in self.l_curves:
+        l_left_curves = [
+            curve for curve in self.l_curves
+            if not getattr(curve, "secondary_y", False)
+        ]
+        l_right_curves = [
+            curve for curve in self.l_curves
+            if getattr(curve, "secondary_y", False)
+        ]
+
+        plt.sca(self.axes)
+        for curve in l_left_curves:
             curve.plot(
                 zlim=self.zlim
                 if hasattr(self, "zlim") else None,  # backwards comp.
                 axes=self.axes)
 
-        if not Curve.legend_is_empty(self.l_curves):
+        if len(l_right_curves):
+            if self.secondary_axes is None:
+                self.secondary_axes = self.axes.twinx()
+            plt.sca(self.secondary_axes)
+            for curve in l_right_curves:
+                curve.plot(
+                    zlim=self.zlim
+                    if hasattr(self, "zlim") else None,  # backwards comp.
+                    axes=self.secondary_axes)
+
+        l_legend_handles = []
+        l_legend_labels = []
+        if len(l_left_curves):
+            l_handles, l_labels = self.axes.get_legend_handles_labels()
+            l_legend_handles.extend(l_handles)
+            l_legend_labels.extend(l_labels)
+        if self.secondary_axes is not None:
+            l_handles, l_labels = self.secondary_axes.get_legend_handles_labels(
+            )
+            l_legend_handles.extend(l_handles)
+            l_legend_labels.extend(l_labels)
+
+        if len(
+            [label for label in l_legend_labels if label and label[0] != "_"]):
             if not hasattr(self, "legend_loc"):
                 self.legend_loc = None  # backwards compatibility
             if not hasattr(self, "num_legend_cols"):
                 self.num_legend_cols = 1
-            self.axes.legend(loc=self.legend_loc, ncol=self.num_legend_cols)
+            self.axes.legend(l_legend_handles,
+                             l_legend_labels,
+                             loc=self.legend_loc,
+                             ncol=self.num_legend_cols)
 
         # Axis labels
         self.axes.set_xlabel(self.xlabel)
         self.axes.set_ylabel(self.ylabel)
+        if self.secondary_axes is not None:
+            self.secondary_axes.set_ylabel(self.secondary_ylabel)
         # X ticks
         if hasattr(self, "xticks") and self.xticks is not None:
             self.axes.set_xticks(self.xticks)
@@ -993,6 +1064,11 @@ class Subplot:
         # Y ticks
         if hasattr(self, "yticks") and self.yticks is not None:
             self.axes.set_yticks(self.yticks)
+
+        if self.secondary_axes is not None and hasattr(
+                self,
+                "secondary_yticks") and self.secondary_yticks is not None:
+            self.secondary_axes.set_yticks(self.secondary_yticks)
 
         if self.projection == '3d' and hasattr(self, 'zlabel') and self.zlabel:
             self.axes.set_zlabel(self.zlabel)
@@ -1018,6 +1094,9 @@ class Subplot:
             self.axes.set_xscale('log')
         if "logy" in dir(self) and self.logy:
             self.axes.set_yscale('log')
+        if self.secondary_axes is not None and hasattr(
+                self, "secondary_logy") and self.secondary_logy:
+            self.secondary_axes.set_yscale('log')
 
         if "xlim" in dir(self):  # backwards compatibility
             if self.xlim:
@@ -1047,14 +1126,32 @@ class Subplot:
                 # Automatic y-limits
                 if regenerating:
                     if not self.is_3D:  # For images, the following line does not work well, so we skip it
-                        if len(self.l_curves):
+                        if len(l_left_curves):
                             try:
-                                ylims = self.get_auto_ylims(.2)
+                                ylims = self.get_auto_ylims(.2, l_left_curves)
                                 if ylims[0] != ylims[
                                         1]:  # Avoids a warning if a curve is constant.
                                     self.axes.set_ylim(ylims)
                             except ValueError:
                                 pass
+
+        if self.secondary_axes is not None:
+            if hasattr(self, "secondary_ylim") and self.secondary_ylim:
+                if isinstance(self.secondary_ylim, float):
+                    self.secondary_axes.set_ylim(
+                        self.get_auto_ylims(self.secondary_ylim,
+                                            l_right_curves))
+                else:
+                    if self.secondary_ylim[0] != self.secondary_ylim[1]:
+                        self.secondary_axes.set_ylim(self.secondary_ylim)
+            else:
+                if regenerating and len(l_right_curves):
+                    try:
+                        ylims = self.get_auto_ylims(.2, l_right_curves)
+                        if ylims[0] != ylims[1]:
+                            self.secondary_axes.set_ylim(ylims)
+                    except ValueError:
+                        pass
 
         return self.axes
 
@@ -1085,7 +1182,7 @@ class Subplot:
                 return True
         return False
 
-    def get_auto_ylims(self, ylim_factor):
+    def get_auto_ylims(self, ylim_factor, l_curves=None):
         """Returns automatic y-limits based on the curves in self.l_curves. 
         
         It first finds the minimum and maximum y-values among all 2D curves
@@ -1098,7 +1195,10 @@ class Subplot:
 
         y_min = sys.float_info.max
         y_max = -sys.float_info.max
-        for curve in self.l_curves:
+        if l_curves is None:
+            l_curves = self.l_curves
+
+        for curve in l_curves:
             if len(curve) == 0:
                 continue
             if not curve.is_3D:
