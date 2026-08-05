@@ -107,8 +107,8 @@ The methods `adapt_dataset_item`, `adapt_input`, and `adapt_target` of
   learning. 
 - one that needs to be always performed, such as feature extraction. 
 
-For this reason, these methods are given the following an object of class
-`AdaptationSpec`, with the following properties:
+For this reason, these methods are given an object of class `AdaptationSpec`,
+with the following properties:
 - `preprocess_only` (bool): This will be true iff the method is called from
   `load_or_create_preprocessed_dataset`. 
 - `input_already_preprocessed` (bool): This will be true iff the method is called on

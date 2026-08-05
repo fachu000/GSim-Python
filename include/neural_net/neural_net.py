@@ -520,10 +520,20 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     def _get_loss(self, data: tuple[InputType, TargetType],
                   f_loss: LossFunType):
         """
+        Computes the loss for a batch of data. The implementation below assumes
+        that data is a tuple (input_batch, target_batch). For other setups,
+        override this function.         
+        
         Args:
 
-            `data`: typ. a tuple of two elements. The first is an input batch
-            and the second a target batch.
+            `data`: one of the items returned by the DataLoader. In supervised
+            learning, it is typically a tuple of two elements: the first is an
+            input batch and the second a target batch.
+            
+            `f_loss`: the loss function that the user passes to `fit` or
+            `evaluate`. `f_loss` is typically a square loss, l1 loss,
+            cross-entropy loss, etc. In complex setups, one may override
+            `_get_loss` and ignore `f_loss`. 
 
         If `unnormalize` is True, the unnormalized loss is returned. This is
         just the result of
@@ -534,12 +544,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             This function returns what `f_loss` returns, i.e., either a vector
             of `num_loss_vals` entries or a `WeightedLoss` whose `values` field
             is a vector of `num_loss_vals` entries (see `usage.md`, Sec.
-            "Weighted loss values"). Usually, each example (i.e., each of the
-            `batch_size` input-target pairs in a batch) produces one loss value.
-            In that case, `num_loss_vals` equals the batch size. The reason why
-            the loss values are returned as a vector rather than in an aggregate
-            scalar is so that each loss value can be weighted properly when
-            batches have different sizes. Note that this can happen even without
+            "Weighted loss values"). 
+            
+            Usually, each example (i.e., each of the `batch_size` input-target
+            pairs in a batch) produces one loss value. In that case,
+            `num_loss_vals` equals the batch size. The reason why the loss
+            values are returned as a vector rather than in an aggregate scalar
+            is so that each loss value can be weighted properly when batches
+            have different sizes. Note that this can happen even without
             gradient accumulation, e.g., when the length of the dataset is not
             an integer multiple of the batch size, so that the last batch is
             smaller.
@@ -1175,8 +1187,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
     def fit(self,
             dataset: Dataset,
-            f_loss: LossFunType,
-            optimizer,
+            optimizer: torch.optim.Optimizer,
+            f_loss: LossFunType | None = None,
             lr_scheduler: _LRScheduler | LRScheduler | None = None,
             no_targets=False,
             num_epochs=None,
@@ -1245,17 +1257,19 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         Args:
             `dataset` (Dataset): The training dataset.
+            
+            `optimizer`: The optimizer to use. 
 
-            `f_loss` (LossFunType): The loss function f_loss(output_batch,
-            target_batch). It is expected to return either 
-                
+            `f_loss` (LossFunType | None): The loss function
+            f_loss(output_batch, target_batch). It is expected to return either
+
                 - a 1D tensor of shape (num_loss_values,), where num_loss_values
                   is typically equal to the batch size (but can be greater; cf.
-                  `usage.md`, Sec. "Multiple loss values per example"), or 
-                
+                  `usage.md`, Sec. "Multiple loss values per example"), or
+
                 - an object of class `WeightedLoss` whose `values` field is a 1D
-                  tensor of shape (num_loss_values,). 
-                  
+                  tensor of shape (num_loss_values,).
+
             The reason why the loss values are returned as a vector rather than
             as a single aggregate scalar is so that each loss value can be
             weighted properly when batches have different sizes, which can
@@ -1265,7 +1279,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             and static metric evaluations) compute the weighted mean of the loss
             values instead of the plain mean.
 
-            `optimizer`: The optimizer to use.
+            `f_loss` may be None only when `_get_loss` is overridden. 
 
             `no_targets` (bool): If True, the datasets (training and validation)
             contain only inputs. Else, they contain pairs (input, target).
@@ -1858,7 +1872,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             if num_patience_evals is None:
                 return False
             if not val:
-                l_ref_tvals = hist.l_train_loss if obtain_static_training_loss else hist.l_train_loss_me
+                if obtain_static_training_loss:
+                    l_ref_tvals = hist.l_train_loss
+                else:
+                    # The moving estimate of the training loss is not stored as
+                    # an attribute; it is recomputed on demand and reported at
+                    # `l_reported_train_loss_me_steps` (see
+                    # `report_training_loss_me`).
+                    ema = hist.compute_train_loss_me(
+                        training_loss_forgetting_factor)
+                    l_ref_tvals = [(s, ema[s])
+                                   for s in hist.l_reported_train_loss_me_steps]
             else:
                 l_ref_tvals = hist.l_val_loss
             l_vals = [t[1] for t in l_ref_tvals]
