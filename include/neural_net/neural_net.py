@@ -2117,12 +2117,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         """
         self._diagnoser = diagnoser
 
-    def _move_to_device(self, obj: Union[torch.Tensor, list, tuple]):
+    def _move_to_device(self, obj: Union[torch.Tensor, list, tuple, dict]):
         non_blocking = self.device_type != "mps"
         if isinstance(obj, torch.Tensor):
             return obj.float().to(
                 self.device_type, non_blocking=non_blocking
             )  # bug https://github.com/pytorch/pytorch/issues/139550
+        elif isinstance(obj, dict):
+            return {
+                key: self._move_to_device(value)
+                for key, value in obj.items()
+            }
         elif isinstance(obj, (list, tuple)):
             return type(obj)(self._move_to_device(item) for item in obj)
         elif hasattr(obj, "to_device"):
@@ -2133,11 +2138,16 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             raise TypeError("Unsupported type.")
 
     @staticmethod
-    def _move_to_cpu(obj: Union[torch.Tensor, list, tuple]):
+    def _move_to_cpu(obj: Union[torch.Tensor, list, tuple, dict]):
         if isinstance(obj, torch.Tensor):
             return obj.detach().to(
                 "cpu", non_blocking=False
             )  # bug https://github.com/pytorch/pytorch/issues/139550
+        elif isinstance(obj, dict):
+            return {
+                key: NeuralNet._move_to_cpu(value)
+                for key, value in obj.items()
+            }
         elif isinstance(obj, (list, tuple)):
             return type(obj)(NeuralNet._move_to_cpu(item) for item in obj)
         elif hasattr(obj, "to_device"):
