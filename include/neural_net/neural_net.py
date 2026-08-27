@@ -1052,18 +1052,21 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         l_out = []
         self.eval()
-        for batch in data_loader:
-            # Ignore the targets if present
-            input_batch = batch[0] if not effective_no_targets else batch
+        with torch.no_grad():
+            for batch in data_loader:
+                # Ignore the targets if present
+                input_batch = batch[0] if not effective_no_targets else batch
 
-            # Run the forward pass
-            input_batch = self._move_to_device(input_batch)
-            output_batch = self._move_to_cpu(self(input_batch))
-            if unnormalize and self.normalizer is not None:
-                output_batch = self.normalizer.unnormalize_output_batch(
-                    output_batch)
-            # l_out is a list of batches
-            l_out.append(output_batch)
+                # Run the forward pass. Since we are in inference mode, no graph
+                # is built, so the outputs are already detached (this is also
+                # ensured by `_move_to_cpu`).
+                input_batch = self._move_to_device(input_batch)
+                output_batch = self._move_to_cpu(self(input_batch))
+                if unnormalize and self.normalizer is not None:
+                    output_batch = self.normalizer.unnormalize_output_batch(
+                        output_batch)
+                # l_out is a list of batches
+                l_out.append(output_batch)
 
         l_uncollated = self.uncollate_fn(l_out)
 
