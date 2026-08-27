@@ -474,7 +474,7 @@ class TestFitStepIntervals:
         kwargs.setdefault('batch_size', self.BATCH_SIZE)
         kwargs.setdefault('shuffle', False)
         kwargs.setdefault('restore_best_checkpoint', False)
-        return net.fit(dataset, _mse, opt, **kwargs)
+        return net.fit(dataset, opt, _mse, **kwargs)
 
     # train_loss_me branch =====================================================
 
@@ -519,8 +519,8 @@ class TestFitStepIntervals:
         opt = self._opt(net)
         with pytest.raises(ValueError, match="dataset has no length"):
             net.fit(_IterableDataset(),
-                    _mse,
                     opt,
+                    _mse,
                     num_steps=10,
                     batch_size=self.BATCH_SIZE,
                     dataset_val=self.VAL_DATASET,
@@ -535,8 +535,8 @@ class TestFitStepIntervals:
         opt = self._opt(net)
         with caplog.at_level(logging.WARNING, logger='gsim'):
             hist = net.fit(_IterableDataset(),
-                           _mse,
                            opt,
+                           _mse,
                            num_steps=10,
                            batch_size=self.BATCH_SIZE,
                            dataset_val=self.VAL_DATASET,
@@ -602,8 +602,8 @@ class TestFitStepIntervals:
         opt = self._opt(net)
         with pytest.raises(ValueError, match="dataset has no length"):
             net.fit(_IterableDataset(),
-                    _mse,
                     opt,
+                    _mse,
                     num_steps=10,
                     batch_size=self.BATCH_SIZE,
                     dataset_val=self.VAL_DATASET,
@@ -635,8 +635,8 @@ class TestFitStepIntervals:
         net = self._net()
         opt = self._opt(net)
         hist = net.fit(_IterableDataset(),
-                       _mse,
                        opt,
+                       _mse,
                        num_steps=10,
                        batch_size=self.BATCH_SIZE,
                        dataset_val=self.VAL_DATASET,
@@ -673,8 +673,8 @@ class TestFitStepIntervals:
         opt = self._opt(net)
         with caplog.at_level(logging.WARNING, logger='gsim'):
             hist = net.fit(_IterableDataset(),
-                           _mse,
                            opt,
+                           _mse,
                            num_steps=10,
                            batch_size=self.BATCH_SIZE,
                            dataset_val=self.VAL_DATASET,
@@ -716,8 +716,8 @@ class TestFitStepIntervals:
         opt = self._opt(net)
         num_steps = 5
         hist = net.fit(self.DATASET,
-                       _mse,
                        opt,
+                       _mse,
                        num_steps=num_steps,
                        batch_size=self.BATCH_SIZE,
                        checkpoint_criterion='always',
@@ -766,8 +766,8 @@ class TestFitStepIntervals:
         net = self._net(nn_folder=str(tmp_path))
         opt = self._opt(net)
         hist = net.fit(self.DATASET,
-                       _mse,
                        opt,
+                       _mse,
                        num_steps=8,
                        batch_size=self.BATCH_SIZE,
                        dataset_val=self.VAL_DATASET,
@@ -780,8 +780,8 @@ class TestFitStepIntervals:
         net = self._net(nn_folder=str(tmp_path))
         opt = self._opt(net)
         hist = net.fit(self.DATASET,
-                       _mse,
                        opt,
+                       _mse,
                        num_steps=8,
                        batch_size=self.BATCH_SIZE,
                        shuffle=False,
@@ -813,8 +813,8 @@ class TestIterableDatasetSupport:
         opt = self._opt(net)
         with pytest.raises(AssertionError, match="no length"):
             net.fit(_IterableDataset(),
-                    _mse,
                     opt,
+                    _mse,
                     num_epochs=2,
                     batch_size=self.BATCH_SIZE,
                     checkpoint_criterion='never',
@@ -827,8 +827,8 @@ class TestIterableDatasetSupport:
         opt = self._opt(net)
         with pytest.raises(ValueError, match="val_split"):
             net.fit(_IterableDataset(),
-                    _mse,
                     opt,
+                    _mse,
                     num_steps=10,
                     batch_size=self.BATCH_SIZE,
                     val_split=0.2,
@@ -841,8 +841,8 @@ class TestIterableDatasetSupport:
         net = self._net()
         opt = self._opt(net)
         hist = net.fit(_IterableDataset(),
-                       _mse,
                        opt,
+                       _mse,
                        num_steps=10,
                        batch_size=self.BATCH_SIZE,
                        dataset_val=self.VAL_DATASET,
@@ -1072,8 +1072,8 @@ class TestWeightedLoss:
             return WeightedLoss(values=v_vals, weights=v_weights)
 
         hist = net.fit(_TinyDataset(),
-                       f_loss,
                        opt,
+                       f_loss,
                        num_steps=4,
                        batch_size=5,
                        shuffle=False,
