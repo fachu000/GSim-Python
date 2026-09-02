@@ -1309,7 +1309,7 @@ class GFigure:
             self.unify_zlim_intervals()
 
         # Transpose the subplots if needed
-        if self.transpose_subplots:
+        if hasattr(self, "transpose_subplots") and self.transpose_subplots:
             self.l_subplots = np.array(self.l_subplots).reshape(
                 self.num_subplot_columns, self.num_subplot_rows).T.flatten()
 
@@ -1322,7 +1322,9 @@ class GFigure:
                     self.num_subplot_rows,
                     self.num_subplot_columns,
                     index + 1,
-                    sharex=prev_axis if index > 0 and subplot.sharex else None,
+                    sharex=prev_axis if
+                    (index > 0 and hasattr(subplot, "sharex")
+                     and subplot.sharex) else None,
                     projection=self.l_subplots[index].projection)
 
         # Layout
