@@ -21,6 +21,10 @@ For coding guidelines, see `gsim/doc/coding_guidelines.md`.
 
 For developing the GSim-Python submodule itself, see `gsim/CLAUDE.md` and `gsim/doc/dev.md`. 
 
+# Running experiments
+
+When running and experiment, do not assume that the experiment will not hang. Set a watchdog and check the status with increasingly long timeouts (1 minute, 5 minutes, 15 minutes, 1 hour, 2 hours, 5 hours, 10 hours, 20 hours, 30 hours, 40 hours, etc.). Monitor the progress (e.g. via a log file or console output) to determine if the experiment is hung. If no progress is observed or the time it is taking exceeds what was expected, investigate the issue and consider killing the experiment.
+
 # PR Reviews
 
 When reviewing a pull request, please verify that:
