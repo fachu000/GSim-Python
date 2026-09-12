@@ -106,6 +106,16 @@ def run_in_workers(func,
         Exceptions raised by `func` propagate to the caller unchanged (the
         pool, if any, is shut down first).
 
+        - `KeyboardInterrupt` (e.g. Ctrl+C, or `kill -SIGINT <pid>` sent to
+          the calling process from another terminal): the worker processes
+          are killed immediately rather than left to drain the queue of
+          already-submitted calls, so the interrupt takes effect promptly.
+          Note that `kill -SIGINT` must target the PID of the process that
+          called `run_in_workers` itself; it is not delivered to the worker
+          processes directly (they have different PIDs), which is why this
+          function kills them explicitly instead of relying on them to
+          receive and handle the signal.
+
     Requirements:
 
         - `func`, `args` and `kwargs` must be picklable: module-level
@@ -173,11 +183,17 @@ def run_in_workers(func,
     try:
         # Step 5: create a pool of fresh (spawned, not forked) processes,
         # each of which reapplies the thread cap via `_pool_initializer`.
+        # Managed manually (rather than via `with`) so that a
+        # `KeyboardInterrupt` in step 7 can kill the workers immediately
+        # (step 7a) instead of going through `ProcessPoolExecutor.__exit__`,
+        # which would call `shutdown(wait=True)` and let every
+        # already-submitted call run to completion first.
         mp_context = multiprocessing.get_context('spawn')
         l_results = [None] * num_calls
-        with ProcessPoolExecutor(max_workers=num_workers,
-                                 mp_context=mp_context,
-                                 initializer=_pool_initializer) as executor:
+        executor = ProcessPoolExecutor(max_workers=num_workers,
+                                       mp_context=mp_context,
+                                       initializer=_pool_initializer)
+        try:
             # Step 6: submit one `_seed_and_call` task per call, tracking
             # which call each future belongs to so results can be placed
             # back at the right index regardless of completion order.
@@ -196,6 +212,24 @@ def run_in_workers(func,
             for future in it:
                 ind_call = d_future_to_ind[future]
                 l_results[ind_call] = future.result()
+        except KeyboardInterrupt:
+            # Step 7a: kill the still-running/queued worker processes right
+            # away, then let the interrupt propagate. The process list is
+            # grabbed before `shutdown` is called: `shutdown` wakes up the
+            # executor's internal management thread, which can clear
+            # `executor._processes` to None concurrently, so reading it
+            # afterwards would race and sometimes see None. `cancel_futures`
+            # drops calls that have not started; `.kill()` on each worker
+            # process stops the one (if any) that is currently running,
+            # rather than waiting for it to finish.
+            l_processes = (list(executor._processes.values())
+                          if executor._processes else [])
+            executor.shutdown(wait=False, cancel_futures=True)
+            for process in l_processes:
+                process.kill()
+            raise
+        else:
+            executor.shutdown(wait=True)
         return l_results
     finally:
         # Step 8: restore the environment variables touched in step 4,

@@ -3,10 +3,24 @@
 
 import sys
 import os
+import signal
+import multiprocessing
 import importlib
 from gsim import init_gsim_logger
 
 gsim_logger = init_gsim_logger()
+
+# A background (`&`) job has SIGINT ignored by shell convention, so `kill
+# -SIGINT <pid>` from another terminal has no effect on it. SIGTERM is not
+# subject to that convention and reaches the process normally, but Python
+# installs no handler for it by default (unlike SIGINT, whose default
+# handler raises `KeyboardInterrupt`), so without this line it would kill
+# the process outright with no chance for `run_in_workers` (see
+# `gsim/include/utils/parallel.py`) to clean up its worker processes first.
+# Reusing `signal.default_int_handler` makes SIGTERM behave exactly like
+# SIGINT, so a run can always be interrupted cleanly from another terminal
+# with `kill -SIGTERM <pid>`, whether it is in the foreground or backgrounded.
+signal.signal(signal.SIGTERM, signal.default_int_handler)
 
 
 def initialize():
@@ -58,15 +72,29 @@ def process_module_name(module_name):
 
 
 def load_modules(experiment_module=None):
-    gsim_logger.info("Loading modules...")
+    # `load_modules` also runs in each worker process spawned by
+    # `run_in_workers` (see `gsim/include/utils/parallel.py`), since under
+    # the `spawn` context they reimport this file as a non-`__main__`
+    # module, which hits the `else: ExperimentSet = load_modules()` branch
+    # at the bottom. None of this logging is meaningful for a worker (there
+    # can be many, and their PID/module loading isn't actionable), so it is
+    # suppressed there.
+    b_log = multiprocessing.current_process().name == 'MainProcess'
+
+    if b_log:
+        gsim_logger.info(f"PID {os.getpid()}. Interrupt via "
+                         f"`kill -SIGTERM {os.getpid()}`.")
+        gsim_logger.info("Loading modules...")
     # Import the module with the proper package context so relative imports work
 
     module_name = experiment_module or gsim_conf.module_name
     module_name_with_package = process_module_name(module_name)
-    gsim_logger.info(f"Loading experiments from {module_name_with_package}...")
+    if b_log:
+        gsim_logger.info(f"Loading experiments from {module_name_with_package}...")
     module = importlib.import_module(module_name_with_package)
     ExperimentSet = getattr(module, "ExperimentSet")
-    gsim_logger.info("Finished loading modules.")
+    if b_log:
+        gsim_logger.info("Finished loading modules.")
     return ExperimentSet
 
 

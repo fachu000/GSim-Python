@@ -1,3 +1,9 @@
+import multiprocessing
+import os
+import signal
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -18,6 +24,11 @@ def _add(a, b=0):
 
 def _raise_value_error():
     raise ValueError("boom")
+
+
+def _sleep_a_while():
+    time.sleep(5)
+    return 1
 
 
 def test_serial_equals_parallel():
@@ -95,3 +106,30 @@ def test_num_workers_none():
                                b_pass_index=True,
                                b_progress=False)
     assert l_results == [0, 1, 2]
+
+
+def test_keyboard_interrupt_kills_workers():
+    """A `KeyboardInterrupt` while calls are still running (e.g. from `kill
+    -SIGINT <pid>` sent to the calling process) must terminate the worker
+    processes promptly instead of waiting for them to drain the queue of
+    submitted calls, and must not leave orphaned worker processes behind."""
+    def _send_sigint():
+        time.sleep(1)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    threading.Thread(target=_send_sigint, daemon=True).start()
+
+    start = time.time()
+    with pytest.raises(KeyboardInterrupt):
+        run_in_workers(_sleep_a_while,
+                       num_calls=4,
+                       num_workers=4,
+                       b_progress=False)
+    elapsed = time.time() - start
+
+    # The calls sleep for 5 s each; a prompt interrupt should return well
+    # before that.
+    assert elapsed < 4
+
+    time.sleep(0.5)  # let the killed worker processes be reaped
+    assert multiprocessing.active_children() == []
