@@ -2,48 +2,48 @@
         General scheme of normalization and unnormalization
         ---------------------------------------------------
 
-        Training: 
+        Training:
         - - - - -
 
                              ┌───┐      ┌─────────┐  output batch ┌──────┐
            ┌-> input batch-> │ 1 │ ---> | forward | ---┬--------->| loss |-----> normalized loss
-           |                 └───┘      └─────────┘    |    ┌─--->|      | 
+           |                 └───┘      └─────────┘    |    ┌─--->|      |
            |                                           |    |     └──────┘
         Dataset                                        |    |
-           |                                           |    |     ┌───┐    
+           |                                           |    |     ┌───┐
            |                                           └--------->| 3 |---┐   ┌──────┐
            |                                                |     └───┘   └-->|      |
            |                              ┌───┐             |                 | loss |---> unnormalized loss
            └-> target batch --------------| 2 |-------------|     ┌───┐   ┌─->|      |
                                           └───┘             └-----| 4 |---┘   └──────┘
                                                                   └───┘
-        
+
         Prediction:
         - - - - - -
-                           ┌───┐      ┌─────────┐  output batch ┌───┐        unnormalized 
+                           ┌───┐      ┌─────────┐  output batch ┌───┐        unnormalized
             input batch -> │ 1 │ ---> | forward | ------------->| 3 |----->  outputs
                            └───┘      └─────────┘               └───┘
-        
-        Legend:        
+
+        Legend:
         - - - -
-        
+
         1. normalize_input_batch      |
         2. normalize_targets_batch    | -> NeuralNet.collate_fn
-        
+
         3. unnormalize_output_batch   |
         4. unnormalize_targets_batch  | -> NeuralNet.make_unnormalized_loss
 
-        
-        Remarks:
-        - - - - 
 
-            - The unnormalized loss is computed only if requested (eval_unnormalized_loss). 
+        Remarks:
+        - - - -
+
+            - The unnormalized loss is computed only if requested (eval_unnormalized_loss).
 
             - The normalization (1 and 2) is applied in the DataLoader. One
               could think of alternatively normalizing the entire dataset before
               training, but that would require storage space equal to the size
               of the dataset. For this reason, normalization is carried out in
-              the DataLoader. 
+              the DataLoader.
 
             - Steps 1 and 2 are performed in the CPU. The forward and upper loss
               computations are carried out by the GPU. Thus, while the GPU
@@ -78,19 +78,19 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
     ]  # List the attributes to be saved/loaded in this list
 
     def __init__(self, folder: str | None | Literal[False] = None):
-        """       
-        See a description of normalization in `normalizers.py`. 
-        
+        """
+        See a description of normalization in `normalizers.py`.
+
         Args:
             `folder`: folder where the parameters of the normalizer are loaded
             from this folder when the NeuralNet is initialized (cf.
-            self.load_if_file_exists) and saved when fitting (cf. `self.save`). 
-            
+            self.load_if_file_exists) and saved when fitting (cf. `self.save`).
+
                 - If None, the folder to be used is the same as the
                 one used by the NeuralNet (nn_folder). In this case,
-                `self.folder` will be set by the NeuralNet constructor. 
-                
-                - If False, no folder is used. 
+                `self.folder` will be set by the NeuralNet constructor.
+
+                - If False, no folder is used.
 
         """
 
@@ -137,10 +137,10 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
     def load_if_file_exists(self):
         """
         This method can be overridden. In that case, recall to set
-        self.are_parameters_set to True. 
-        
+        self.are_parameters_set to True.
+
         However, it is preferable to to define setters and getters for the
-        parameters indicated by self.l_params_to_save. 
+        parameters indicated by self.l_params_to_save.
         """
         if self.params_file is None or not os.path.exists(self.params_file):
             return
@@ -235,13 +235,13 @@ class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
 
     def __init__(self, mode: str, **kwargs):
         """
-        This normalizer is to be used with datasets of pairs (input, targets). 
+        This normalizer is to be used with datasets of pairs (input, targets).
 
         This class separately normalizes each entry of the input and targets.
         For example, if the input are an M x N matrix, then normalization
         will subtract a mean M x N matrix obtained by averaging the input
         matrices in the dataset and will divide by the standard deviation M x N
-        matrix obtained likewise. 
+        matrix obtained likewise.
 
         Args:
 
@@ -254,7 +254,7 @@ class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
             `folder`: if not None, the statistics of the normalization are
             loaded from this folder. When training, the statistics are saved in
             this folder.
-        
+
         """
 
         super().__init__(**kwargs)
@@ -391,7 +391,7 @@ class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
 class FeatNormalizer(ABC):
     """
     Abstract base class for feature-wise normalizers.
-    
+
     These normalizers process a single feature (column) at a time. They maintain
     an internal state that is updated via the `fit` method, which is called with
     batches of values for that feature.
@@ -403,7 +403,7 @@ class FeatNormalizer(ABC):
     def fit(self, values: torch.Tensor):
         """
         Update the internal state with a batch of values for this feature.
-        
+
         Args:
             values: 1D tensor or array-like containing values for this feature
         """
@@ -413,10 +413,10 @@ class FeatNormalizer(ABC):
     def normalize(self, values: torch.Tensor) -> torch.Tensor:
         """
         Normalize the given values.
-        
+
         Args:
             values: 1D tensor containing values to normalize
-            
+
         Returns:
             Normalized values as a tensor
         """
@@ -426,10 +426,10 @@ class FeatNormalizer(ABC):
     def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
         """
         Unnormalize the given values.
-        
+
         Args:
             values: 1D tensor containing normalized values
-            
+
         Returns:
             Unnormalized values as a tensor
         """
@@ -457,53 +457,87 @@ class IdentityFeatNormalizer(FeatNormalizer):
 class StdFeatNormalizer(FeatNormalizer):
     """
     A feature normalizer that normalizes to zero mean and unit standard deviation.
-    
+
     This normalizer accumulates values during the fit phase to compute mean and
     standard deviation, then applies the transformation: (x - mean) / std
+
+    The mean and variance are updated with Chan's parallel form of Welford's
+    algorithm, in explicit float64. A naive `E[x^2] - mean^2` formula
+    subtracts two nearly-equal numbers whenever the mean is much larger than
+    the spread (e.g. Unix timestamps in seconds), and rounding error can then
+    dominate the result -- even making the computed variance negative.
     """
 
     l_params_to_save = ["mean", "std"]
 
+    # Below this many accumulated values, seeing only one repeated value is
+    # expected and not a sign of a constant feature: fit() may be called with
+    # one value at a time, so the earliest calls legitimately repeat.
+    MIN_COUNT_FOR_CONSTANT_WARNING = 1000
+
     def __init__(self):
         self.mean: float | None = None
         self.std: float | None = None
-        self._sum: float = 0.0
-        self._sum_sq: float = 0.0
         self._count: int = 0
+        self._mean_acc: float = 0.0  # running mean, kept in float64
+        self._m2: float = 0.0  # running sum of squared deviations from the mean, kept in float64
+        self._warned_constant = False
 
     def fit(self, values: torch.Tensor):
         """
         Accumulate statistics from a batch of values.
-        
+
         Args:
             values: 1D tensor containing values for this feature
         """
         if len(values) == 0:
             return
 
-        values_np = values.cpu().numpy() if isinstance(
-            values, torch.Tensor) else np.array(values)
+        values_np = (values.detach().cpu().numpy()
+                     if isinstance(values, torch.Tensor) else np.asarray(values))
+        batch = np.asarray(values_np, dtype=np.float64).ravel()
 
-        self._sum += np.sum(values_np)
-        self._sum_sq += np.sum(values_np**2)
-        self._count += len(values_np)
+        n_b = batch.size
+        mean_b = float(batch.mean())
+        m2_b = float(((batch - mean_b)**2).sum())
 
-        # Update mean and std
-        self.mean = self._sum / self._count
-        variance = (self._sum_sq / self._count) - (self.mean**2)
-        self.std = np.sqrt(max(variance, 0.0))  # Ensure non-negative variance
+        n_a = self._count
+        if n_a == 0:
+            self._count, self._mean_acc, self._m2 = n_b, mean_b, m2_b
+        else:
+            n = n_a + n_b
+            delta = mean_b - self._mean_acc
+            self._mean_acc += delta * n_b / n
+            self._m2 += m2_b + delta * delta * n_a * n_b / n
+            self._count = n
 
-        # Avoid division by zero
-        if self.std == 0.0:
+        self.mean = np.float32(self._mean_acc)
+        variance = self._m2 / self._count
+        std = float(np.sqrt(variance))
+
+        # Zero variance can mean two different things: the feature really is
+        # constant (in which case dividing by a std of 0 makes no sense, so
+        # we substitute 1.0 and leave the values as they are), or fit() simply
+        # has not seen enough values yet to know better. Only warn about the
+        # first case, since the second one is routine.
+        if std == 0.0:
+            if self._count >= self.MIN_COUNT_FOR_CONSTANT_WARNING and not self._warned_constant:
+                self._warned_constant = True
+                gsim_logger.warning(
+                    "%s: feature is still constant after %d values (mean %.6g); using "
+                    "std = 1.0. A constant input carries no information -- check the feature.",
+                    type(self).__name__, self._count, self._mean_acc)
             self.std = 1.0
+        else:
+            self.std = np.float32(std)
 
     def normalize(self, values: torch.Tensor) -> torch.Tensor:
         """
         Normalize values to zero mean and unit standard deviation.
-        
+
         Args:
             values: 1D tensor containing values to normalize
-            
+
         Returns:
             Normalized values
         """
@@ -514,10 +548,10 @@ class StdFeatNormalizer(FeatNormalizer):
     def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
         """
         Unnormalize values back to original scale.
-        
+
         Args:
             values: 1D tensor containing normalized values
-            
+
         Returns:
             Unnormalized values
         """
@@ -529,7 +563,7 @@ class StdFeatNormalizer(FeatNormalizer):
 class ScaleToUnitPowerFeatNormalizer(FeatNormalizer):
     """
     A feature normalizer that scales values to have unit power.
-    
+
     This normalizer scales input by 1/sqrt(E[value²]) so that the power
     of the output (E[scaled_value²]) becomes 1.
     """
@@ -544,7 +578,7 @@ class ScaleToUnitPowerFeatNormalizer(FeatNormalizer):
     def fit(self, values: torch.Tensor):
         """
         Accumulate statistics from a batch of values.
-        
+
         Args:
             values: 1D tensor containing values for this feature
         """
@@ -568,10 +602,10 @@ class ScaleToUnitPowerFeatNormalizer(FeatNormalizer):
     def normalize(self, values: torch.Tensor) -> torch.Tensor:
         """
         Scale values to have unit power.
-        
+
         Args:
             values: 1D tensor containing values to normalize
-            
+
         Returns:
             Normalized values with E[value²] = 1
         """
@@ -582,10 +616,10 @@ class ScaleToUnitPowerFeatNormalizer(FeatNormalizer):
     def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
         """
         Scale values back to original scale.
-        
+
         Args:
             values: 1D tensor containing normalized values
-            
+
         Returns:
             Unnormalized values
         """
@@ -597,7 +631,7 @@ class ScaleToUnitPowerFeatNormalizer(FeatNormalizer):
 class IntervalFeatNormalizer(FeatNormalizer):
     """
     A feature normalizer that scales values to a specified interval.
-    
+
     This normalizer tracks the minimum and maximum values seen during fitting
     and scales values to the specified target interval.
     """
@@ -616,7 +650,7 @@ class IntervalFeatNormalizer(FeatNormalizer):
     def fit(self, values: torch.Tensor):
         """
         Update min and max values from a batch.
-        
+
         Args:
             values: 1D tensor containing values for this feature
         """
@@ -642,10 +676,10 @@ class IntervalFeatNormalizer(FeatNormalizer):
     def normalize(self, values: torch.Tensor) -> torch.Tensor:
         """
         Shift and scale values to the target interval.
-        
+
         Args:
             values: 1D tensor containing values to normalize
-            
+
         Returns:
             Normalized values in the target interval
         """
@@ -667,10 +701,10 @@ class IntervalFeatNormalizer(FeatNormalizer):
     def unnormalize(self, values: torch.Tensor) -> torch.Tensor:
         """
         Scale values back from the target interval to original scale.
-        
+
         Args:
             values: 1D tensor containing normalized values
-            
+
         Returns:
             Unnormalized values
         """
@@ -692,25 +726,25 @@ class IntervalFeatNormalizer(FeatNormalizer):
 class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
     """
     A normalizer that applies different FeatNormalizers to each feature (column).
-    
+
     This normalizer processes batches of shape (batch_size, num_feat) and applies
     a separate normalizer to each column.
-    
+
     Example:
         normalizer = MultiFeatNormalizer(
             input_normalizers=[
                 StdFeatNormalizer(),
                 IntervalFeatNormalizer(interval=(-1, 1)),
                 IdentityFeatNormalizer()
-            ],            
+            ],
             targets_normalizers=[...],
             output_normalizers=[...]
         )
 
-    The `input_normalizers` and `targets_normalizers` are fit to the dataset. 
-        
+    The `input_normalizers` and `targets_normalizers` are fit to the dataset.
+
     If `output_normalizers` is not provided, the target normalizers are used
-    for unnormalizing outputs.        
+    for unnormalizing outputs.
     """
 
     l_params_to_save = ["input_normalizers_state", "targets_normalizers_state"]
@@ -726,11 +760,11 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
             input_normalizers: List of FeatNormalizers, one per input feature
 
             targets_normalizers: List of FeatNormalizers, one per target feature
-            
+
             output_normalizers: List of FeatNormalizers, one per output feature.
             If None or empty, the target normalizers are used for unnormalizing
             outputs.
-            
+
             batch_size: Batch size for fitting normalizers
         """
         super().__init__(**kwargs)
@@ -772,10 +806,10 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
     def _fit(self, dataset: Dataset):
         """
         Fit all FeatNormalizers using the dataset.
-        
+
         This method iterates through the dataset in batches and fits each
         FeatNormalizer with the values from its corresponding column.
-        
+
         Args:
             dataset: Dataset returning pairs (input, targets)
         """
@@ -853,12 +887,12 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
                         method_name: str) -> torch.Tensor:
         """
         Helper method to apply a transformation to a batch using a list of normalizers.
-        
+
         Args:
             batch: Tensor of shape (batch_size, num_feats)
             normalizers: List of FeatNormalizers, one per feature
             method_name: Name of the method to call on each normalizer ('normalize' or 'unnormalize')
-            
+
         Returns:
             Transformed batch of the same shape
         """
@@ -883,10 +917,10 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
     def normalize_input_batch(self, input_batch: InputType) -> InputType:
         """
         Normalize input batch by applying each FeatNormalizer to its column.
-        
+
         Args:
             input_batch: Tensor of shape (batch_size, num_input_feats)
-            
+
         Returns:
             Normalized input batch of the same shape
         """
@@ -896,10 +930,10 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
     def normalize_targets_batch(self, targets_batch: TargetType) -> TargetType:
         """
         Normalize targets batch by applying each FeatNormalizer to its column.
-        
+
         Args:
             targets_batch: Tensor of shape (batch_size, num_target_feats)
-            
+
         Returns:
             Normalized targets batch of the same shape
         """
@@ -909,10 +943,10 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
     def unnormalize_output_batch(self, output_batch: OutputType) -> OutputType:
         """
         Unnormalize output batch by applying each FeatNormalizer to its column.
-        
+
         Args:
             output_batch: Tensor of shape (batch_size, num_output_feats)
-            
+
         Returns:
             Unnormalized output batch of the same shape
         """
@@ -927,10 +961,10 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
                                   targets_batch: TargetType) -> TargetType:
         """
         Unnormalize targets batch by applying each FeatNormalizer to its column.
-        
+
         Args:
             targets_batch: Tensor of shape (batch_size, num_target_feats)
-            
+
         Returns:
             Unnormalized targets batch of the same shape
         """

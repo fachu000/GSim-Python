@@ -515,3 +515,103 @@ class TestMultiFeatNormalizer:
         # Should raise assertion error
         with pytest.raises(AssertionError):
             normalizer.fit(dataset)
+
+
+# Epoch seconds spanning roughly a training window: a huge mean with a
+# comparatively tiny spread, which is precisely what breaks a naive
+# E[x^2] - mean^2 variance formula under float32/float64 rounding.
+_EPOCH_START = 1_640_995_200.0  # 2022-01-01
+_SPAN_SECONDS = 22_000_000.0  # ~8.5 months
+
+
+def _feed(normalizer, v_values):
+    for value in v_values:
+        normalizer.fit(torch.tensor([value], dtype=torch.float32))
+    return float(normalizer.std)
+
+
+@pytest.fixture
+def v_dates():
+    rng = np.random.default_rng(0)
+    return np.sort(rng.uniform(_EPOCH_START, _EPOCH_START + _SPAN_SECONDS,
+                                20_000)).astype(np.float32)
+
+
+class TestStdFeatNormalizerNumericalStability:
+    """
+    A large mean with a small spread (e.g. raw epoch seconds) makes a naive
+    E[x^2] - mean^2 variance computation subtract two nearly-equal numbers,
+    which is catastrophic under finite precision and can even go negative.
+    StdFeatNormalizer must get this right via Chan's parallel form of
+    Welford's algorithm in explicit float64.
+
+    Fitting one value at a time (as `AVMDataNormalizer._fit` does) is the
+    worst case for the naive formula, so these tests do the same.
+    """
+
+    def test_matches_float64_on_epoch_seconds(self, v_dates):
+        truth = np.asarray(v_dates, dtype=np.float64).std()
+        got = _feed(StdFeatNormalizer(), v_dates)
+        assert got == pytest.approx(truth, rel=1e-4)
+
+    def test_mean_is_also_accurate(self, v_dates):
+        norm = StdFeatNormalizer()
+        _feed(norm, v_dates)
+        assert float(norm.mean) == pytest.approx(
+            np.asarray(v_dates, np.float64).mean(), rel=1e-6)
+
+    def test_ordinary_scale_features_still_work(self):
+        """Areas and prices were never at risk; they must not regress."""
+        rng = np.random.default_rng(1)
+        v_area = rng.normal(90.0, 30.0, 5_000).astype(np.float32)
+        truth = np.asarray(v_area, dtype=np.float64).std()
+        assert _feed(StdFeatNormalizer(), v_area) == pytest.approx(truth, rel=1e-3)
+
+    def test_shuffling_does_not_change_the_answer(self, v_dates):
+        """The naive formula gave a different answer depending on N and on
+        row order, which is exactly what makes it unsafe."""
+        rng = np.random.default_rng(2)
+        shuffled = v_dates.copy()
+        rng.shuffle(shuffled)
+        assert _feed(StdFeatNormalizer(),
+                     v_dates) == pytest.approx(_feed(StdFeatNormalizer(), shuffled),
+                                               rel=1e-6)
+
+    def test_batched_and_one_at_a_time_agree(self, v_dates):
+        one_at_a_time = _feed(StdFeatNormalizer(), v_dates)
+        batched = StdFeatNormalizer()
+        for chunk in np.array_split(v_dates, 37):
+            batched.fit(torch.tensor(chunk, dtype=torch.float32))
+        assert float(batched.std) == pytest.approx(one_at_a_time, rel=1e-6)
+
+    def test_variance_is_never_negative(self, v_dates):
+        """A naive E[x^2] - mean^2 can go negative under rounding error;
+        Welford's running variance cannot."""
+        norm = StdFeatNormalizer()
+        _feed(norm, v_dates)
+        assert float(norm.std) > 0
+
+    def test_a_constant_feature_warns_once(self, caplog):
+        with caplog.at_level('WARNING'):
+            _feed(StdFeatNormalizer(), np.full(2_000, 5.0, dtype=np.float32))
+        assert sum('still constant' in r.message for r in caplog.records) == 1
+
+    def test_early_repeats_do_not_warn(self, caplog):
+        """fit() may be fed one value at a time, so the first samples
+        repeating is normal and says nothing."""
+        with caplog.at_level('WARNING'):
+            _feed(StdFeatNormalizer(), np.full(10, 5.0, dtype=np.float32))
+        assert not [r for r in caplog.records if 'constant' in r.message]
+
+    def test_a_restored_state_normalizes_identically(self, v_dates):
+        """Existing normalizer.pk files must keep loading: the saved params
+        are still just mean and std."""
+        fitted = StdFeatNormalizer()
+        _feed(fitted, v_dates)
+
+        restored = StdFeatNormalizer()
+        for param in fitted.l_params_to_save:
+            setattr(restored, param, getattr(fitted, param))
+
+        sample = torch.tensor(v_dates[:16], dtype=torch.float32)
+        assert torch.allclose(fitted.normalize(sample), restored.normalize(sample))
