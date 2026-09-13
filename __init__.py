@@ -1,5 +1,6 @@
 from .experiment_set import AbstractExperimentSet
 from .experiment_set import OUTPUT_DATA_FOLDER
+from .experiment_set import results_folder, results_file_path, save_to_results_text_file
 import logging
 
 from .gfigure import GFigure
@@ -38,8 +39,7 @@ def init_gsim_logger():
 
     handler = logging.StreamHandler()
     handler.setLevel(logging.INFO)
-    formatter = GColoredFormatter('{levelname}:{module}:{lineno}: {message}',
-                                  style='{')
+    formatter = GColoredFormatter('{levelname}:{module}:{lineno}: {message}', style='{')
     handler.setFormatter(formatter)
     if not logger.handlers:
         logger.addHandler(handler)

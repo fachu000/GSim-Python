@@ -11,6 +11,11 @@ OUTPUT_DATA_FOLDER = "./output/"
 
 gsim_logger = logging.getLogger("gsim")
 
+# Set by run_experiment for the duration of the experiment function, so that
+# utilities called from inside it (save_to_results_text_file) know where this
+# experiment's results go. None outside a run.
+_current_run: tuple[type, str] | None = None  # (experiment set class, experiment id)
+
 
 def is_a_gfigure(obj):
     """Returns True if `obj` is a GFigure object, False otherwise."""
@@ -19,18 +24,46 @@ def is_a_gfigure(obj):
     return obj.__class__.__name__ == "GFigure"
 
 
+def results_folder() -> str:
+    """Folder where gsim stores the running experiment's GFigures (the .pk file)."""
+    if _current_run is None:
+        raise RuntimeError("results_folder() called outside of run_experiment.")
+    cls, _experiment_id = _current_run
+    return cls.experiment_set_data_folder()
+
+
+def results_file_path(file_type: str, suffix: str = "") -> str:
+    """`<results_folder>/experiment_<id>[_<suffix>].<file_type>` for the running experiment."""
+    if _current_run is None:
+        raise RuntimeError("results_file_path() called outside of run_experiment.")
+    cls, experiment_id = _current_run
+    f_name = cls._experiment_id_to_f_name(experiment_id)
+    if suffix:
+        f_name = f"{f_name}_{suffix}"
+    return f"{results_folder()}{f_name}.{file_type}"
+
+
+def save_to_results_text_file(file_type: str, content: str, suffix: str = "") -> str:
+    """
+    Write `content` to `results_file_path(file_type, suffix)`, creating the folder,
+    print "Written results to <path>", and return the path. Text only. Raises
+    RuntimeError outside run_experiment.
+    """
+    path = results_file_path(file_type, suffix)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+    print(f"Written results to {path}")
+    return path
+
+
 class AbstractExperimentSet:
 
     def _experiment_id_to_f_name(experiment_id):
         return f"{EXPERIMENT_FUNCTION_BASE_NAME}{experiment_id}"
 
     @classmethod
-    def run_experiment(cls,
-                       experiment_id,
-                       l_args=[],
-                       save_pdf=False,
-                       inspect=False,
-                       no_plot=False):
+    def run_experiment(cls, experiment_id, l_args=[], save_pdf=False, inspect=False, no_plot=False):
         """ Executes the experiment function with identifier <ind_experiment>
 
         Args:
@@ -44,17 +77,18 @@ class AbstractExperimentSet:
         if f_name in dir(cls):
             start_time = datetime.now()
             gsim_logger.info(
-                "----------------------------------------------------------------------"
-            )
+                "----------------------------------------------------------------------")
+            gsim_logger.info(f"Starting experiment {experiment_id} at {datetime.now()}.")
             gsim_logger.info(
-                f"Starting experiment {experiment_id} at {datetime.now()}.")
-            gsim_logger.info(
-                "----------------------------------------------------------------------"
-            )
-            l_G = getattr(cls, f_name)(l_args)
+                "----------------------------------------------------------------------")
+            global _current_run
+            _current_run = (cls, str(experiment_id))
+            try:
+                l_G = getattr(cls, f_name)(l_args)
+            finally:
+                _current_run = None
             end_time = datetime.now()
-            gsim_logger.info("Elapsed time = " +
-                             time_to_str(end_time - start_time))
+            gsim_logger.info("Elapsed time = " + time_to_str(end_time - start_time))
 
             # Set l_G to be a (possibly empty) list of GFigure
             if l_G is None:
@@ -65,8 +99,7 @@ class AbstractExperimentSet:
             if is_a_gfigure(l_G):
                 l_G = [l_G]
             # From this point on, l_G must be a list of GFigure
-            if (type(l_G) != list) or (len(l_G) > 0
-                                       and not is_a_gfigure(l_G[0])):
+            if (type(l_G) != list) or (len(l_G) > 0 and not is_a_gfigure(l_G[0])):
                 raise Exception("""Function %s returns an unexpected type.
                        It must return either None, a GFigure object,
                        or a list of GFigure objects.""" % f_name)
@@ -77,8 +110,7 @@ class AbstractExperimentSet:
             else:
                 cls._store_fig(l_G, experiment_id)
                 if no_plot and not save_pdf:
-                    gsim_logger.info(
-                        "Skipping plotting because `no_plot` is True.")
+                    gsim_logger.info("Skipping plotting because `no_plot` is True.")
                 else:
                     cls._plot_list_of_GFigure(l_G,
                                               save_pdf=save_pdf,
@@ -104,8 +136,7 @@ class AbstractExperimentSet:
             gsim_logger.info("The GFigures are available as `l_G`.")
             gsim_logger.info("Press 'c' to continue, save, and plot. ")
             gsim_logger.info(
-                "You can type `interact` to enter interactive mode and `Ctr D` to exit. "
-            )
+                "You can type `interact` to enter interactive mode and `Ctr D` to exit. ")
             from IPython.core.debugger import set_trace
             set_trace()
             cls._store_fig(l_G, experiment_id)
@@ -134,18 +165,13 @@ class AbstractExperimentSet:
             plt.show()
 
     @classmethod
-    def plot_only(cls,
-                  experiment_id,
-                  save_pdf=False,
-                  inspect=False,
-                  no_plot=False):
+    def plot_only(cls, experiment_id, save_pdf=False, inspect=False, no_plot=False):
 
         f_name = EXPERIMENT_FUNCTION_BASE_NAME + experiment_id
         l_G = cls._load_fig(f_name)
         if l_G is None:  # There is no data for this experiment.
-            gsim_logger.error(
-                "The experiment %s does not exist or has not been run before."
-                % experiment_id)
+            gsim_logger.error("The experiment %s does not exist or has not been run before." %
+                              experiment_id)
         else:
             cls._plot_list_of_GFigure(l_G,
                                       save_pdf=save_pdf,
