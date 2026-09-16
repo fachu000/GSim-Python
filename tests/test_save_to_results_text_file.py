@@ -13,32 +13,33 @@ class _ThrowawayExperimentSet(gsim.AbstractExperimentSet):
         return None
 
 
-class _ThrowawayExperimentSetWithSuffix(gsim.AbstractExperimentSet):
+class _ThrowawayExperimentSetWithFileKey(gsim.AbstractExperimentSet):
 
     def experiment_hello(l_args):
-        gsim.save_to_results_text_file('csv', 'a,b', suffix='predictions')
+        gsim.save_to_results_text_file('csv', 'a,b', file_key='predictions')
         return None
 
 
-def test_save_to_results_text_file_writes_next_to_the_pk(tmp_path, monkeypatch):
+def test_save_to_results_text_file_writes_next_to_the_pk_with_default_file_key(
+        tmp_path, monkeypatch):
     monkeypatch.setattr(experiment_set_module, 'OUTPUT_DATA_FOLDER', str(tmp_path) + os.sep)
 
     _ThrowawayExperimentSet.run_experiment('hello', no_plot=True)
 
     target_folder = _ThrowawayExperimentSet.experiment_set_data_folder()
-    path = os.path.join(target_folder, 'experiment_hello.md')
+    path = os.path.join(target_folder, 'experiment_hello_results.md')
     assert os.path.exists(path)
     with open(path) as f:
         assert f.read() == 'hello'
 
 
-def test_save_to_results_text_file_puts_an_underscore_before_a_non_empty_suffix(
+def test_save_to_results_text_file_uses_the_given_file_key(
         tmp_path, monkeypatch):
     monkeypatch.setattr(experiment_set_module, 'OUTPUT_DATA_FOLDER', str(tmp_path) + os.sep)
 
-    _ThrowawayExperimentSetWithSuffix.run_experiment('hello', no_plot=True)
+    _ThrowawayExperimentSetWithFileKey.run_experiment('hello', no_plot=True)
 
-    target_folder = _ThrowawayExperimentSetWithSuffix.experiment_set_data_folder()
+    target_folder = _ThrowawayExperimentSetWithFileKey.experiment_set_data_folder()
     assert os.path.exists(os.path.join(target_folder, 'experiment_hello_predictions.csv'))
 
 

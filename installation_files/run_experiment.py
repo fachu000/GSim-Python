@@ -82,8 +82,6 @@ def load_modules(experiment_module=None):
     b_log = multiprocessing.current_process().name == 'MainProcess'
 
     if b_log:
-        gsim_logger.info(f"PID {os.getpid()}. Interrupt via "
-                         f"`kill -SIGTERM {os.getpid()}`.")
         gsim_logger.info("Loading modules...")
     # Import the module with the proper package context so relative imports work
 
