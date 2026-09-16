@@ -429,18 +429,6 @@ class Curve:
 
     def _plot_2D(self):
 
-        def plot_band(lower, upper):
-            if self.xaxis:
-                plt.fill_between(self.xaxis, lower, upper, alpha=0.2)
-            else:
-                plt.fill_between(lower, upper, alpha=0.2)
-
-        if hasattr(self, "ylower"):  # check for backwards compatibility
-            if self.ylower:
-                plot_band(self.ylower, self.yaxis)
-            if self.yupper:
-                plot_band(self.yaxis, self.yupper)
-
         if ((type(self.xaxis) == list) or
             (type(self.xaxis) == np.ndarray)) and len(self.xaxis):
             axis_args = (self.xaxis, self.yaxis)
@@ -457,7 +445,8 @@ class Curve:
 
             # stem does not take 'color' as an argument, but the color may be
             # specified through `style`
-            plot_fun(*axis_args, style, label=self.legend_str)
+            container = plot_fun(*axis_args, style, label=self.legend_str)
+            color = container.markerline.get_color()
         else:
             # Get the color from self.style if present
             color_spec = style.split("#")[1] if "#" in style else None
@@ -490,6 +479,26 @@ class Curve:
                                       style,
                                       label=self.legend_str,
                                       **kwargs)
+            color = self.line.get_color()
+
+        # The bands are plotted after the curve so that they take its color
+        # rather than consuming further colors of the color cycle.
+        def plot_band(lower, upper):
+            if len(axis_args) == 2:
+                plt.fill_between(self.xaxis, lower, upper, alpha=0.2,
+                                 color=color)
+            else:
+                plt.fill_between(range(len(lower)), lower, upper, alpha=0.2,
+                                 color=color)
+
+        def is_given(band):
+            return band is not None and len(band)
+
+        if hasattr(self, "ylower"):  # check for backwards compatibility
+            if is_given(self.ylower):
+                plot_band(self.ylower, self.yaxis)
+            if is_given(self.yupper):
+                plot_band(self.yaxis, self.yupper)
 
     def _plot_3D(self, axes=None, interpolation="none", zlim=None):
 
