@@ -166,7 +166,8 @@ if __name__ == '__main__':
     if args.plot_only:
         ExperimentSet.plot_only(experiment_index,
                                 save_pdf=args.export,
-                                inspect=args.inspect)
+                                inspect=args.inspect,
+                                no_plot=args.no_plot)
     else:
         if args.gpu is not None:
             os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"

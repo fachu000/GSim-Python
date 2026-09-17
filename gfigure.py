@@ -636,6 +636,7 @@ class Subplot:
                  ylim=None,
                  zlim=None,
                  xticks=None,
+                 xticklabels=None,
                  num_xticks_decimal_places=None,
                  yticks=None,
                  legend_loc=None,
@@ -660,6 +661,9 @@ class Subplot:
         self.ylim = ylim
         self.zlim = zlim
         self.xticks = xticks
+        # Labels of the ticks in `xticks`, e.g. names of categories placed
+        # at integer positions. Requires `xticks`.
+        self.xticklabels = xticklabels
         self.num_xticks_decimal_places = num_xticks_decimal_places
         self.yticks = yticks
         self.legend_loc = legend_loc
@@ -991,6 +995,8 @@ class Subplot:
         # X ticks
         if hasattr(self, "xticks") and self.xticks is not None:
             self.axes.set_xticks(self.xticks)
+            if getattr(self, "xticklabels", None) is not None:
+                self.axes.set_xticklabels(self.xticklabels)
 
         if hasattr(self, "num_xticks_decimal_places"
                    ) and self.num_xticks_decimal_places is not None:
