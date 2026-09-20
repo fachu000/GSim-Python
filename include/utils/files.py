@@ -1,3 +1,4 @@
+import fcntl
 import logging
 import os
 import pickle
@@ -123,6 +124,14 @@ def load_or_compute_checkpoint(path: Path | str | None = None,
     one metric per point of a parameter grid): each value is persisted as soon
     as it is computed, so an interrupted sweep can be resumed without
     recomputing what was already saved.
+
+    Several processes may share a checkpoint file (e.g. copies of an
+    experiment computing disjoint sets of keys in parallel): the dict is
+    re-read and merged under an exclusive lock on a sidecar `.lock` file
+    right before it is written, so that a value written by another process
+    while `f_compute()` was running is not lost. `f_compute()` itself runs
+    outside the lock. Two processes computing the same key both write it;
+    the value of the last one to finish remains.
     """
     path = _resolve_path(path, file_key)
     try:
@@ -145,10 +154,18 @@ def load_or_compute_checkpoint(path: Path | str | None = None,
                 f"missing in {path}")
 
     value = f_compute()
-    d_cache[checkpoint_key] = value
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "wb") as f:
-        pickle.dump(d_cache, f)
+    with open(path + ".lock", "w") as f_lock:
+        fcntl.flock(f_lock, fcntl.LOCK_EX)
+        try:
+            with open(path, "rb") as f:
+                d_cache = pickle.load(f)
+        except FileNotFoundError:
+            d_cache = {}
+        d_cache[checkpoint_key] = value
+        with open(path, "wb") as f:
+            pickle.dump(d_cache, f)
+        fcntl.flock(f_lock, fcntl.LOCK_UN)
     if verbosity >= 1:
         gsim_logger.info(
             f"Written computation for key {checkpoint_key} to {path}")
