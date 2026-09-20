@@ -81,31 +81,40 @@ CURVE ARGUMENTS:
 1. 2D plots
     -----------
 
-xaxis and yaxis: 
+xaxis, yaxis, ylower, yupper, and whiskers:
 
-(a) To specify only one curve: 
+These arguments specify one or more curves and their decorations. They are
+broadcast with the same rule:
 
-    - `yaxis` can be a 1D np.ndarray, a 1D tf.Tensor or a list of a
-        numeric
-    type 
+    - The last dimension of each of them is the number of points of the curve.
+      When two or more are given, the length of their last dimension must
+      coincide (curve by curve if there are several curves).
 
-    - `xaxis` can be None, a list of a numeric type, or a 1D np.array
-    of the same length as `yaxis`. 
+    - To specify one curve, these args must be 1D: a list of a numeric type, a
+      1D np.ndarray, or a 1D tf.Tensor (a list of `WhiskerSpec` for `whiskers`).
 
-(b) To specify one or more curves: 
+    - To specify M curves, at least one of these args must be 2D: a list of M
+      entries with the format of the 1D case (a different length per curve is
+      OK), or an M x N np.ndarray or tf.Tensor, where each row corresponds to a
+      curve. A 1D argument is broadcast to all the curves (e.g. a 1D `xaxis` is
+      shared by all curves).
 
-    - `yaxis` can be: -> a list whose elements are as described in (a)
-        -> M
-    x N np.ndarray or tf.Tensor. Each row corresponds to a curve. 
+    - `xaxis` can also be None or [], in which case the x-axis of every curve is
+      0, 1, ..., N-1.
 
-    - `xaxis` can be either as in (a), so all curves share the same
-        X-axis
-    points, or -> a list whose elements are as described in (a) -> Mx x N
-    np.ndarray. Each row corresponds to a curve. Mx must be either M or 1.
-    
+    - `yaxis` can also be None: only the whiskers/bands are drawn. At least one
+      of `yaxis`, `ylower`, `yupper`, and `whiskers` must be given (unless
+      `xaxis` is also empty, in which case no curve is added).
+
 ylower and yupper: specify a shaded area around the curve, used e.g. for
 confidence bounds. The area between ylower and yaxis as well as the area between
-yaxis and yupper are shaded. Their format is the same as yaxis.
+yaxis and yupper are shaded. If `yaxis` is None, the area between ylower and
+yupper is shaded, and both must be given.
+
+whiskers: `WhiskerSpec` objects, one per point of the curve, drawn at `xaxis[n]`
+as a box-and-whisker plot in the color of the curve (typically minimum, lower
+quartile, median, upper quartile, and maximum of some samples; see
+`GFigure.add_whiskers_curve` to obtain them from samples).
 
 zaxis: None
 
@@ -283,6 +292,33 @@ def is_number(num):
     return all(hasattr(num, attr) for attr in attrs)
 
 
+class WhiskerSpec:
+    """Values drawn by a box-and-whisker plot at one point of a curve; see
+    the argument `whiskers` of GFigure.__init__. Typically, `low_whisker`,
+    `box_bottom`, `line_inside`, `box_top`, and `high_whisker` are the
+    minimum, the lower quartile, the median, the upper quartile, and the
+    maximum of some samples."""
+
+    def __init__(self, low_whisker, box_bottom, line_inside, box_top,
+                 high_whisker):
+        self.low_whisker = float(low_whisker)
+        self.box_bottom = float(box_bottom)
+        self.line_inside = float(line_inside)
+        self.box_top = float(box_top)
+        self.high_whisker = float(high_whisker)
+
+    def as_tuple(self):
+        return (self.low_whisker, self.box_bottom, self.line_inside,
+                self.box_top, self.high_whisker)
+
+    def __eq__(self, other):
+        return isinstance(other,
+                          WhiskerSpec) and self.as_tuple() == other.as_tuple()
+
+    def __repr__(self):
+        return f"WhiskerSpec{self.as_tuple()}"
+
+
 class Curve:
 
     def __init__(self,
@@ -292,6 +328,7 @@ class Curve:
                  zinterpolation='none',
                  ylower=[],
                  yupper=[],
+                 whiskers=None,
                  style=None,
                  mode=None,
                  legend_str="",
@@ -306,12 +343,16 @@ class Curve:
         xaxis : None or a list of a numeric type. In the latter case, its length 
             equals the length of yaxis.
 
-        yaxis : list of a numeric type. 
+        yaxis : list of a numeric type, or None if at least one of
+            `ylower`, `yupper`, and `whiskers` is given.
 
         zaxis : None
 
         ylower, yupper: [] or lists of a numeric type with the same length as
         yaxis.
+
+        whiskers: None or a list of `WhiskerSpec` with the same length as
+        `yaxis`; see GFigure.__init__.
 
         mode : can be 'plot' or 'stem'
 
@@ -338,13 +379,37 @@ class Curve:
         # Input check
         if zaxis is None:
             # 2D plot
-            if type(yaxis) != list:
+            def is_given(arg):
+                return arg is not None and len(arg)
+
+            if yaxis is None:
+                if not (is_given(ylower) or is_given(yupper)
+                        or is_given(whiskers)):
+                    raise TypeError(
+                        "`yaxis` can be None only if `ylower`, `yupper`, or "
+                        "`whiskers` is given")
+                if is_given(ylower) != is_given(yupper):
+                    raise ValueError("If `yaxis` is None, `ylower` and "
+                                     "`yupper` must be both given or none")
+            elif type(yaxis) != list:
                 raise TypeError("`yaxis` must be a list of numeric entries")
             if type(xaxis) == list:
-                assert len(xaxis) == len(yaxis)
+                pass
             elif xaxis is not None:
                 raise TypeError(
                     "`xaxis` must be a list of numeric entries or None")
+            s_lengths = {
+                len(arg)
+                for arg in (xaxis, yaxis, ylower, yupper, whiskers)
+                if is_given(arg)
+            }
+            if len(s_lengths) > 1:
+                raise ValueError(
+                    "`xaxis`, `yaxis`, `ylower`, `yupper`, and `whiskers` "
+                    f"must have the same length; got {s_lengths}")
+            if whiskers is not None and not all(
+                    isinstance(w, WhiskerSpec) for w in whiskers):
+                raise TypeError("`whiskers` must be a list of `WhiskerSpec`")
         else:
             # 3D plot
 
@@ -408,6 +473,7 @@ class Curve:
         # 2D
         self.ylower = ylower
         self.yupper = yupper
+        self.whiskers = whiskers
         self.style = style
         self.legend_str = legend_str
 
@@ -418,7 +484,7 @@ class Curve:
         self.aspect = aspect
 
     def __repr__(self):
-        return f"<Curve: legend_str = {self.legend_str}, num_points = {len(self.yaxis)}>"
+        return f"<Curve: legend_str = {self.legend_str}, num_points = {len(self)}>"
 
     def plot(self, **kwargs):
 
@@ -427,13 +493,51 @@ class Curve:
         else:
             self._plot_2D()
 
+    @staticmethod
+    def _split_style(style):
+        """Returns `(style_without_color, d_color_kwargs)`, where
+        `d_color_kwargs` is `{'color': <hex color>}` if `style` contains a
+        color specification after '#' (either 6 hex digits or the index of a
+        color in the default color cycle) and `{}` otherwise."""
+        color_spec = style.split("#")[1] if "#" in style else None
+        if color_spec:
+            if len(color_spec) == 6:
+                hex_color = "#" + color_spec
+            else:
+                # The default color cycle of matplotlib contains just 10
+                # colors. Consider extending this.
+                plt_colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+                hex_color = plt_colors[int(color_spec) % len(plt_colors)]
+            kwargs = {'color': hex_color}
+        else:
+            kwargs = dict()
+        return style.split("#")[0], kwargs
+
     def _plot_2D(self):
+
+        # Decorations of the curve. `getattr` for curves pickled before the
+        # attribute existed.
+        def get_decoration(name):
+            decoration = getattr(self, name, None)
+            return decoration if (decoration is not None
+                                  and len(decoration)) else None
+
+        ylower = get_decoration("ylower")
+        yupper = get_decoration("yupper")
+        whiskers = get_decoration("whiskers")
+
+        if self.yaxis is None:
+            # Decorations only: a curve of NaNs takes a color from the color
+            # cycle and provides the legend entry, but draws nothing.
+            yaxis = [np.nan] * len(self)
+        else:
+            yaxis = self.yaxis
 
         if ((type(self.xaxis) == list) or
             (type(self.xaxis) == np.ndarray)) and len(self.xaxis):
-            axis_args = (self.xaxis, self.yaxis)
+            axis_args = (self.xaxis, yaxis)
         else:
-            axis_args = (self.yaxis, )
+            axis_args = (yaxis, )
 
         style = self.style if self.style else "-"
 
@@ -449,20 +553,7 @@ class Curve:
             color = container.markerline.get_color()
         else:
             # Get the color from self.style if present
-            color_spec = style.split("#")[1] if "#" in style else None
-            if color_spec:
-                if len(color_spec) == 6:
-                    hex_color = "#" + color_spec
-                else:
-                    # The default color cycle of matplotlib contains just 10
-                    # colors. Consider extending this.
-                    plt_colors = plt.rcParams['axes.prop_cycle'].by_key(
-                    )['color']
-                    hex_color = plt_colors[int(color_spec) % len(plt_colors)]
-                kwargs = {'color': hex_color}
-            else:
-                kwargs = dict()
-            style = style.split("#")[0]
+            style, kwargs = Curve._split_style(style)
 
             if hasattr(self, 'line') and (self.line is not None):
                 # The curve has been plotted before. Update the data.
@@ -481,24 +572,65 @@ class Curve:
                                       **kwargs)
             color = self.line.get_color()
 
-        # The bands are plotted after the curve so that they take its color
-        # rather than consuming further colors of the color cycle.
+        # The decorations are plotted after the curve so that they take its
+        # color rather than consuming further colors of the color cycle.
         def plot_band(lower, upper):
             if len(axis_args) == 2:
-                plt.fill_between(self.xaxis, lower, upper, alpha=0.2,
+                plt.fill_between(self.xaxis,
+                                 lower,
+                                 upper,
+                                 alpha=0.2,
                                  color=color)
             else:
-                plt.fill_between(range(len(lower)), lower, upper, alpha=0.2,
+                plt.fill_between(range(len(lower)),
+                                 lower,
+                                 upper,
+                                 alpha=0.2,
                                  color=color)
 
-        def is_given(band):
-            return band is not None and len(band)
+        if self.yaxis is None:
+            if ylower is not None and yupper is not None:
+                plot_band(ylower, yupper)
+        else:
+            if ylower is not None:
+                plot_band(ylower, self.yaxis)
+            if yupper is not None:
+                plot_band(self.yaxis, yupper)
 
-        if hasattr(self, "ylower"):  # check for backwards compatibility
-            if is_given(self.ylower):
-                plot_band(self.ylower, self.yaxis)
-            if is_given(self.yupper):
-                plot_band(self.yaxis, self.yupper)
+        if whiskers is not None:
+            self._plot_whiskers(whiskers, color)
+
+    def _plot_whiskers(self, whiskers, color):
+        """Draws one box-and-whisker plot per entry of `whiskers` at the
+        corresponding point of the x-axis, in the given color."""
+        if ((type(self.xaxis) == list) or
+            (type(self.xaxis) == np.ndarray)) and len(self.xaxis):
+            positions = np.array(self.xaxis, dtype=float)
+        else:
+            positions = np.arange(len(whiskers), dtype=float)
+        # The boxes are half as wide as the smallest distance between
+        # consecutive positions.
+        v_spacing = np.diff(np.unique(positions))
+        width = 0.5 * np.min(v_spacing) if len(v_spacing) else 0.5
+        l_stats = [{
+            'whislo': w.low_whisker,
+            'q1': w.box_bottom,
+            'med': w.line_inside,
+            'q3': w.box_top,
+            'whishi': w.high_whisker
+        } for w in whiskers]
+        d_line_props = {'color': color}
+        # `manage_ticks=False` leaves the ticks as they are (by default,
+        # `bxp` places a tick with a label at every box).
+        plt.gca().bxp(l_stats,
+                      positions=positions,
+                      widths=width,
+                      showfliers=False,
+                      manage_ticks=False,
+                      boxprops=d_line_props,
+                      whiskerprops=d_line_props,
+                      capprops=d_line_props,
+                      medianprops=d_line_props)
 
     def _plot_3D(self, axes=None, interpolation="none", zlim=None):
 
@@ -579,7 +711,17 @@ class Curve:
         return hasattr(self, "zaxis") and self.zaxis is not None
 
     def __len__(self):
-        return len(self.yaxis) if self.yaxis is not None else 0
+        """Number of points of the curve. For 3D curves, the number of
+        entries of `zaxis`. For 2D curves, the length of `xaxis`, `yaxis`,
+        or of any decoration (`ylower`, `yupper`, `whiskers`), whichever is
+        given (all of them have the same length); 0 if none is given."""
+        if self.is_3D:
+            return self.zaxis.size
+        for name in ("yaxis", "xaxis", "ylower", "yupper", "whiskers"):
+            arg = getattr(self, name, None)
+            if arg is not None and len(arg):
+                return len(arg)
+        return 0
 
 
 class VerticalLinesCurve(Curve):
@@ -701,6 +843,7 @@ class Subplot:
                   zinterpolation="bilinear",
                   ylower=[],
                   yupper=[],
+                  whiskers=None,
                   styles=[],
                   mode=None,
                   legend=tuple(),
@@ -711,13 +854,15 @@ class Subplot:
 
         if zaxis is None:
             # 2D figure
-            self.l_curves += Subplot._l_2D_curves_from_input_args(xaxis,
-                                                                  yaxis,
-                                                                  ylower,
-                                                                  yupper,
-                                                                  styles,
-                                                                  legend,
-                                                                  mode=mode)
+            self.l_curves += Subplot._l_2D_curves_from_input_args(
+                xaxis,
+                yaxis,
+                ylower,
+                yupper,
+                styles,
+                legend,
+                mode=mode,
+                whiskers=whiskers)
         else:
             # 3D figure
             self.l_curves.append(
@@ -731,111 +876,193 @@ class Subplot:
     def add_vertical_lines(self, *args, **kwargs):
         self.l_curves.append(VerticalLinesCurve(subplot=self, *args, **kwargs))
 
-    def _l_2D_curves_from_input_args(xaxis, yaxis, ylower, yupper, styles,
-                                     legend, mode):
+    def _l_2D_curves_from_input_args(xaxis,
+                                     yaxis,
+                                     ylower,
+                                     yupper,
+                                     styles,
+                                     legend,
+                                     mode,
+                                     whiskers=None):
+        """Returns a list of `Curve` objects built from the arguments of
+        `add_curve`, broadcast as described in GFigure.__init__."""
 
-        def expand_default_xaxes(l_xaxis, l_yaxis):
-            """
-            Expands the default xaxes in l_xaxis. That is, if an entry of
-            l_xaxis is None or [], it is replaced with the default xaxis for the
-            corresponding entry of l_yaxis.
+        l_num_pts = Subplot._infer_num_pts(xaxis, yaxis, ylower, yupper,
+                                           whiskers)
+        num_curves = len(l_num_pts)
+        if num_curves == 0:
+            return []
 
-            We need to expand the default axes because of animations. Else, if
-            the user specifies a default xaxis and then he/she changes the
-            lenght of `yaxis`, the default xaxis would not be updated and an
-            error would be raised as matplotlib would try to plot a curve where
-            the x and y axes have different lengths.
-            """
-
-            def expand_default_xaxis(xax, yax):
-                """If xax is None or [], it returns the default xaxis for the
-                provided yax. Else, it returns xax.
-                """
-                if xax is None or (type(xax) == list and len(xax) == 0):
-                    return list(range(0, len(yax)))
-                else:
-                    return xax
-
-            for ind in range(0, len(l_yaxis)):
-                l_xaxis[ind] = expand_default_xaxis(l_xaxis[ind], l_yaxis[ind])
-            return l_xaxis
-
-        # Process the subplot input.  Each entry of xaxis can be
-        # either None (use default x-axis) or a list of float. Each
-        # entry of yaxis is a list of float. Both xaxis and
-        # yaxis will have the same length.
-        l_xaxis, l_yaxis = Subplot._list_from_axis_arguments(xaxis, yaxis)
-        l_xaxis = expand_default_xaxes(l_xaxis, l_yaxis)
-        # Each entry of `l_ylower` and `l_yupper` is either None (do
-        # not shade any area) or a list of float.
-        l_ylower, _ = Subplot._list_from_axis_arguments(ylower, yaxis)
-        l_yupper, _ = Subplot._list_from_axis_arguments(yupper, yaxis)
-        l_style = Subplot._list_from_style_argument(styles)
-        # Note: all these lists can be empty.
+        l_xaxis = Subplot._broadcast_curve_arg(xaxis, l_num_pts)
+        l_xaxis = [
+            list(range(num_pts)) if xax is None else xax
+            for xax, num_pts in zip(l_xaxis, l_num_pts)
+        ]
+        l_yaxis = Subplot._broadcast_curve_arg(yaxis, l_num_pts)
+        l_ylower = Subplot._broadcast_curve_arg(ylower, l_num_pts)
+        l_yupper = Subplot._broadcast_curve_arg(yupper, l_num_pts)
+        l_whiskers = Subplot._broadcast_curve_arg(whiskers, l_num_pts)
 
         # Process style input.
+        l_style = Subplot._list_from_style_argument(styles)
         if len(l_style) == 0:
-            l_style = [None] * len(l_xaxis)
+            l_style = [None] * num_curves
         elif len(l_style) == 1:
-            l_style = l_style * len(l_xaxis)
+            l_style = l_style * num_curves
         else:
-            #   if len(l_style) < len(l_xaxis):
-            #       raise ValueError("The length of the styles argument needs to be at least the number of curves.")
-            assert len(l_style) >= len(
-                l_xaxis
-            ), "The length of `style` must be" " either 1 or no less than the number of curves"
-            l_style = l_style[0:len(l_xaxis)]
+            assert len(l_style) >= num_curves, (
+                "The length of `style` must be either 1 or no less than the "
+                "number of curves")
+            l_style = l_style[0:num_curves]
 
         # Process the legend
         assert ((type(legend) == tuple) or (type(legend) == list)
                 or (type(legend) == str))
         if type(legend) == str:
-            legend = [legend] * len(l_xaxis)
+            legend = [legend] * num_curves
         else:  # legend is tuple or list
             if len(legend) == 0:
-                legend = [""] * len(l_xaxis)
+                legend = [""] * num_curves
             else:
                 if type(legend[0]) != str:
                     raise TypeError(
                         "`legend` must be an str, list of str, or tuple of str."
                     )
-                if (len(legend) != len(l_yaxis)):
+                if (len(legend) != num_curves):
                     raise ValueError(
                         f"len(legend)={len(legend)} should equal 0 or the "
-                        f"number of curves={len(l_yaxis)}")
-
-        b_debug = True
-        if b_debug:
-            conditions = [
-                len(l_xaxis) == len(l_yaxis),
-                len(l_xaxis) == len(l_style),
-                type(l_xaxis) == list,
-                type(l_yaxis) == list,
-                type(l_style) == list,
-                (len(l_xaxis) == 0) or (type(l_xaxis[0]) == list)
-                or (l_xaxis[0] is None),
-                (len(l_yaxis) == 0) or (type(l_yaxis[0]) == list)
-                or (l_yaxis[0] is None),
-                (len(l_style) == 0) or (type(l_style[0]) == str)
-                or (l_style[0] is None),
-            ]
-            if not np.all(conditions):
-                print(conditions)
-                raise ValueError
+                        f"number of curves={num_curves}")
 
         # Construct Curve objects
         l_curve = []
-        for xax, yax, ylow, yup, stl, leg in zip(l_xaxis, l_yaxis, l_ylower,
-                                                 l_yupper, l_style, legend):
+        for xax, yax, ylow, yup, whisk, stl, leg in zip(
+                l_xaxis, l_yaxis, l_ylower, l_yupper, l_whiskers, l_style,
+                legend):
             l_curve.append(
                 Curve(xaxis=xax,
                       yaxis=yax,
-                      ylower=ylow,
-                      yupper=yup,
+                      ylower=[] if ylow is None else ylow,
+                      yupper=[] if yup is None else yup,
+                      whiskers=whisk,
                       style=stl,
                       legend_str=leg,
                       mode=mode))
         return l_curve
+
+    @staticmethod
+    def _unify_curve_arg(arg):
+        """Returns `arg` (one of `xaxis`, `yaxis`, `ylower`, `yupper`, or
+        `whiskers`; see GFigure.__init__) as None if it is None or empty, or
+        as a list of lists otherwise: one inner list per curve, with the
+        values (floats, or `WhiskerSpec` objects) of that curve."""
+
+        def is_element(entry):
+            return np.isscalar(entry) or isinstance(entry, WhiskerSpec)
+
+        if hasattr(arg, "numpy"):  # Compatibility with TensorFlow
+            arg = arg.numpy()
+        if arg is None:
+            return None
+        if isinstance(arg, np.ndarray):
+            if arg.size == 0:
+                return None
+            if arg.ndim == 1:
+                return [[float(v) for v in arg]]
+            if arg.ndim == 2:
+                return [[float(v) for v in row] for row in arg]
+            raise ValueError("Input arrays need to be of dimension 1 or 2")
+        if isinstance(arg, (list, tuple)):
+            if len(arg) == 0:
+                return None
+            if is_element(arg[0]):
+                # 1D: a single curve
+                if not all(is_element(entry) for entry in arg):
+                    raise TypeError(
+                        "The entries of a 1D argument must all be numbers "
+                        "or `WhiskerSpec` objects")
+                return [[
+                    entry if isinstance(entry, WhiskerSpec) else float(entry)
+                    for entry in arg
+                ]]
+            # 2D: one entry per curve
+            ll_out = []
+            for entry in arg:
+                l_entry = Subplot._unify_curve_arg(entry)
+                if l_entry is None:
+                    l_entry = [[]]
+                if len(l_entry) != 1:
+                    raise ValueError(
+                        "A 2D argument must be a list of 1D entries")
+                ll_out.append(l_entry[0])
+            return ll_out
+        raise TypeError(
+            "`xaxis`, `yaxis`, `ylower`, `yupper`, and `whiskers` must be "
+            "None, lists, np.ndarrays, or tf.Tensors")
+
+    @staticmethod
+    def _infer_num_pts(xaxis, yaxis, ylower, yupper, whiskers):
+        """Returns a list with the number of points of each curve specified
+        by the arguments (the length of the list is the number of curves);
+        see GFigure.__init__. It is empty if no curve is specified."""
+        d_args = {
+            'xaxis': Subplot._unify_curve_arg(xaxis),
+            'yaxis': Subplot._unify_curve_arg(yaxis),
+            'ylower': Subplot._unify_curve_arg(ylower),
+            'yupper': Subplot._unify_curve_arg(yupper),
+            'whiskers': Subplot._unify_curve_arg(whiskers),
+        }
+        d_given = {name: ll for name, ll in d_args.items() if ll is not None}
+        if not d_given:
+            return []
+        if 'whiskers' in d_given and not all(
+                isinstance(w, WhiskerSpec) for row in d_given['whiskers']
+                for w in row):
+            raise TypeError("`whiskers` must contain `WhiskerSpec` objects")
+        if list(d_given.keys()) == ['xaxis']:
+            raise ValueError("At least one of `yaxis`, `ylower`, `yupper`, "
+                             "and `whiskers` must be given")
+
+        # The number of curves is the number of entries of the 2D arguments,
+        # which must agree.
+        s_num_curves = {len(ll) for ll in d_given.values() if len(ll) > 1}
+        if len(s_num_curves) > 1:
+            raise ValueError("The arguments specify different numbers of "
+                             f"curves: {s_num_curves}")
+        num_curves = s_num_curves.pop() if s_num_curves else 1
+
+        l_num_pts = []
+        for ind_curve in range(num_curves):
+            s_num_pts = {
+                len(ll[ind_curve] if len(ll) > 1 else ll[0])
+                for ll in d_given.values()
+            }
+            if len(s_num_pts) > 1:
+                raise ValueError(
+                    f"The arguments of curve {ind_curve} have different "
+                    f"numbers of points: {s_num_pts}")
+            l_num_pts.append(s_num_pts.pop())
+        return l_num_pts
+
+    @staticmethod
+    def _broadcast_curve_arg(arg, l_num_pts):
+        """Returns a list with one entry per curve (as many as entries in
+        `l_num_pts`; see `_infer_num_pts`) with the values of `arg` for that
+        curve: None if `arg` is None or empty, else a list of `l_num_pts[n]`
+        values. A 1D `arg` is broadcast to all the curves."""
+        ll_arg = Subplot._unify_curve_arg(arg)
+        num_curves = len(l_num_pts)
+        if ll_arg is None:
+            return [None] * num_curves
+        if len(ll_arg) == 1:
+            ll_arg = ll_arg * num_curves
+        if len(ll_arg) != num_curves:
+            raise ValueError(
+                f"Expected {num_curves} curves, got {len(ll_arg)}")
+        for l_entry, num_pts in zip(ll_arg, l_num_pts):
+            if len(l_entry) != num_pts:
+                raise ValueError(f"Expected {num_pts} points, got "
+                                 f"{len(l_entry)}")
+        return [list(l_entry) for l_entry in ll_arg]
 
     def _list_from_style_argument(style_arg):
         """
@@ -851,119 +1078,6 @@ class Subplot:
             return copy.copy(style_arg)
         else:
             raise TypeError(err_msg)
-
-    def _list_from_axis_arguments(xaxis_arg, yaxis_arg):
-        """Processes subplot arguments and returns two lists of the same length
-      whose elements can be either None or lists of a numerical
-      type. None means "use the default x-axis for this curve".
-
-      Both returned lists can be empty if no curve is specified.
-
-      """
-
-        def unify_format(axis):
-            """
-            Returns:
-
-                ll_out: it can be [None] or a list of lists. In the second case,
-                ll_out[n] is [] or a list of float. 
-            
-            """
-
-            def ndarray_to_list_of_lists(arr):
-                """Returns a list of lists."""
-                assert (type(arr) == np.ndarray)
-                if arr.ndim == 1:
-                    if len(arr):
-                        return [list(arr)]
-                    else:
-                        return []
-                elif arr.ndim == 2:
-                    return [[arr[row, col] for col in range(0, arr.shape[1])]
-                            for row in range(0, arr.shape[0])]
-                else:
-                    raise ValueError(
-                        "Input arrays need to be of dimension 1 or 2")
-
-            # Compatibility with TensorFlow
-            if hasattr(axis, "numpy"):
-                axis = axis.numpy()
-
-            if (type(axis) == np.ndarray):
-                return ndarray_to_list_of_lists(axis)
-            elif (type(axis) == list):
-                # at this point, `axis` can be:
-                # 1. empty list: either no curves are specified or, in case of
-                #    the x-axis, the specified curves should use the default xaxis.
-                if len(axis) == 0:
-                    return []
-                # 2. A list of a numeric type. Only one curve specified.
-                if is_number(axis[0]):
-                    return [[float(ax) for ax in axis]]
-                # 3. A list where each entry specifies one curve.
-                else:
-                    out_list = []
-                    for entry in axis:
-                        # Each entry can be:
-                        # 3a. a tf.Tensor
-                        if hasattr(entry, "numpy"):
-                            entry = entry.numpy()
-
-                        # 3b. an np.ndarray
-                        if isinstance(entry, np.ndarray):
-                            if entry.ndim == 1:
-                                out_list.append([float(ent) for ent in entry])
-                            else:
-                                raise Exception(
-                                    "Arrays inside the list must be 1D in the current implementation"
-                                )
-                        # 3c. a list of a numeric type
-                        elif type(entry) == list:
-                            # 3c1: for an x-axis, empty `entry` means default axis.
-                            if len(entry) == 0:
-                                out_list.append([])
-                            # 3c2: Numerical type
-                            elif is_number(entry[0]):
-                                out_list.append([float(ent) for ent in entry])
-                            else:
-                                raise TypeError
-                    return out_list
-            elif axis is None:
-                return [None]
-            else:
-                raise TypeError
-
-        # Construct two lists of possibly different lengths.
-        l_xaxis = unify_format(xaxis_arg)
-        l_yaxis = unify_format(yaxis_arg)
-        """At this point, `l_xaxis` can be:
-
-      - []: use the default xaxis if a curve is provided (len(l_yaxis)>0). No
-        curves specified if len(l_yaxis)=0. 
-
-      - [None]: use the default xaxis for all specfied curves.
-      
-      - [xaxis1, xaxis2,... xaxisN], where xaxisn is a list of float.
-      """
-
-        # Expand (broadcast) l_xaxis to have the same length as l_yaxis
-        if len(l_xaxis) > 0 and len(l_yaxis) == 0:
-            raise Exception("The x-axis was provided but the y-axis was not.")
-        str_message = "Number of lists in the xaxis must be" "0, 1 or equal to the number of curves in the y axis"
-        if len(l_xaxis) > 1 and len(l_yaxis) != len(l_xaxis):
-            raise Exception(str_message)
-        if len(l_xaxis) == 0 and len(l_yaxis) > 0:
-            l_xaxis = [None]
-        if len(l_yaxis) > 1:
-            if len(l_xaxis) == 1:
-                l_xaxis = l_xaxis * len(l_yaxis)
-            if len(l_xaxis) != len(l_yaxis):
-                raise Exception(str_message)
-        elif len(l_yaxis) == 1:
-            if len(l_xaxis) != 1:
-                raise Exception(str_message)
-
-        return l_xaxis, l_yaxis
 
     def plot(self, *subplot_args, **subplot_kwargs):
 
@@ -1114,7 +1228,8 @@ class Subplot:
         y_min = sys.float_info.max
         y_max = -sys.float_info.max
         for curve in self.l_curves:
-            if len(curve) == 0:
+            # Only the values of `yaxis` are considered.
+            if len(curve) == 0 or curve.yaxis is None:
                 continue
             if not curve.is_3D:
                 # 2D curve
@@ -1249,6 +1364,65 @@ class GFigure:
         self.add_curve(v_x,
                        v_y,
                        *args,
+                       ind_active_subplot=ind_active_subplot,
+                       **kwargs)
+
+    def add_whiskers_curve(self,
+                           data,
+                           xaxis=[],
+                           f_stats=None,
+                           ind_active_subplot=None,
+                           **kwargs):
+        """Plots whiskers computed from the samples in `data` on the active
+        subplot; cf. the argument `whiskers` of GFigure.__init__. Any other
+        argument of `add_curve` (e.g. `yaxis`, `styles`, `legend`) can be
+        passed through `kwargs`. See also the example below.
+
+        Args:
+
+            - `data`: samples summarized by each box. It can be a list of L
+              lists/arrays (possibly of different lengths), an L x M array (one
+              row per box), or a single list/1D array of samples, which is
+              understood as `[data]` (a single box).
+
+            - `xaxis`: None, [], or a list of length L; see GFigure.__init__.
+
+            - `f_stats`: function that maps a 1D array of samples to a
+              `WhiskerSpec`. By default, minimum, lower quartile, median, upper
+              quartile, and maximum.
+        """
+        if f_stats is None:
+
+            def f_stats(v_samples):
+                return WhiskerSpec(np.min(v_samples),
+                                   np.percentile(v_samples, 25),
+                                   np.median(v_samples),
+                                   np.percentile(v_samples, 75),
+                                   np.max(v_samples))
+
+        if hasattr(data, "numpy"):  # Compatibility with TensorFlow
+            data = data.numpy()
+        if isinstance(data, np.ndarray):
+            if data.ndim == 1:
+                l_samples = [data]
+            elif data.ndim == 2:
+                l_samples = list(data)
+            else:
+                raise ValueError("`data` must be of dimension 1 or 2")
+        elif isinstance(data, (list, tuple)):
+            if len(data) and np.isscalar(data[0]):
+                l_samples = [data]
+            else:
+                l_samples = list(data)
+        else:
+            raise TypeError("`data` must be a list or an np.ndarray")
+
+        whiskers = [
+            f_stats(np.ravel(np.asarray(v_samples, dtype=float)))
+            for v_samples in l_samples
+        ]
+        self.add_curve(xaxis=xaxis,
+                       whiskers=whiskers,
                        ind_active_subplot=ind_active_subplot,
                        **kwargs)
 
@@ -1852,6 +2026,37 @@ def plot_example_figure(ind_example):
 
         G = GFigure.make_periodically_refreshing_figure(make_figure,
                                                         interval=50)
+
+    elif ind_example == 17:
+        # Example of whiskers: (i) a curve with whiskers given explicitly;
+        # (ii) whiskers computed from samples (one box per group of samples)
+        # without a curve, together with the samples themselves.
+        v_x = np.arange(5)
+        v_y = v_x**2
+        G = GFigure(
+            xaxis=v_x,
+            yaxis=v_y,
+            whiskers=[WhiskerSpec(y - 2, y - 1, y, y + 1, y + 3) for y in v_y],
+            styles='o-',
+            xlabel='x',
+            ylabel='f(x)',
+            title='Curve with whiskers',
+            legend='f(x) and whiskers')
+        l_samples = [np.random.randn(30) * (ind + 1) for ind in range(3)]
+        v_positions = np.arange(len(l_samples))
+        G.next_subplot(xlabel='Group',
+                       ylabel='Value',
+                       title='Whiskers from samples',
+                       xticks=v_positions,
+                       xticklabels=['A', 'B', 'C'])
+        G.add_whiskers_curve(l_samples,
+                             xaxis=v_positions,
+                             styles='#1',
+                             legend='min, quartiles, median, max')
+        for v_samples, position in zip(l_samples, v_positions):
+            G.add_curve(xaxis=position * np.ones(len(v_samples)),
+                        yaxis=v_samples,
+                        styles='.#0')
 
     else:
         raise ValueError("Invalid example index")
