@@ -17,6 +17,19 @@ function ignore_file {
     fi
 }
 
+function add_gitattributes {
+    # LF line endings for the parent repository, on every OS. Appends the
+    # template to .gitattributes unless a `* text...` rule is there already.
+    local template="${GSIM_DIR}${INSTALLATION_FOLDER}/dot-gitattributes"
+    if [ -f ".gitattributes" ] && grep -qE '^\*[[:space:]]+text' ".gitattributes"; then
+        echo "A line-ending rule already exists in .gitattributes"
+    else
+        echo "Adding line-ending rules to .gitattributes..."
+        [ -s ".gitattributes" ] && echo "" >> .gitattributes
+        cat "$template" >> .gitattributes
+    fi
+}
+
 if [ ! -f "gsim/install.sh" ]
 then
     echo "ERROR: You must enter the root folder of your repository before executing this file."
@@ -50,8 +63,9 @@ echo "Installing GSim-Python..."
 # The following sets git to sync the submodules when doing `git pull`
 git config submodule.recurse true
 
-# Automatically remove Windows carriage returns
-git config core.autocrlf true
+# Line endings are set by .gitattributes, not by core.autocrlf: `autocrlf true`
+# writes CRLF into every checkout, which breaks shebang scripts on Linux/macOS.
+add_gitattributes
 
 # Useful git aliases
 git config --global alias.lo "log --graph --decorate --pretty=oneline --abbrev-commit --all"
@@ -124,6 +138,8 @@ function copy_experiment_file {
     else
         echo "File $dest already exists. Skipping copy."
     fi
+    # The copy is the user's own sandbox, not part of the parent repository.
+    ignore_file "$dest"
 }
 
 # Copy the default example experiments file if missing
