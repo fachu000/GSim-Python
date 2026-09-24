@@ -138,6 +138,8 @@ function copy_experiment_file {
     else
         echo "File $dest already exists. Skipping copy."
     fi
+    # The copy is the user's own sandbox, not part of the parent repository.
+    ignore_file "$dest"
 }
 
 # Copy the default example experiments file if missing
