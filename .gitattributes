@@ -1,0 +1,8 @@
+# Store and check out text files with LF line endings on every OS, whatever
+# each user's core.autocrlf says. Windows editors handle LF; a shebang line
+# ending in CR does not run on Linux or macOS.
+* text=auto eol=lf
+
+# Files that Windows tools require with CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
