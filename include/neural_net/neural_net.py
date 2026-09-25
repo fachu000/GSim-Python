@@ -4,7 +4,9 @@ import functools
 import logging
 import os
 import pickle
+import shutil
 import multiprocessing
+import warnings
 from filelock import FileLock
 from abc import ABC, abstractmethod
 from collections.abc import Sized
@@ -320,6 +322,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     """
 
     _initialized = False
+
+    # Default names of the files in `nn_folder`. They are class constants due to
+    # code that reads a folder without a network instance
+    # (`load_hist_from_folder`, `live_plot`, the deprecated path helpers). An
+    # instance reads the `*_file_name` properties, which return these unless a
+    # subclass overrides them.
+    DEFAULT_WEIGHT_FILE_NAME = "weights.pth"
+    DEFAULT_BEST_VAL_WEIGHT_FILE_NAME = "weights-best_val.pth"
+    DEFAULT_OPTIMIZER_STATE_FILE_NAME = "optimizer.pth"
+    DEFAULT_LR_SCHEDULER_STATE_FILE_NAME = "lr_scheduler.pth"
+    DEFAULT_HIST_FILE_NAME = "hist.pk"
 
     def __init__(self,
                  *args,
@@ -1078,30 +1091,68 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             ]
         return make_output(l_uncollated, output_class)
 
+    # Files in `nn_folder`. Each name is a property so that a subclass can
+    # override it, e.g. to choose the file per instance (cf. the `DEFAULT_*`
+    # class constants). The paths are built from the names.
+
     @property
-    def weight_file_path(self):
+    def weight_file_name(self) -> str:
+        return self.DEFAULT_WEIGHT_FILE_NAME
+
+    @property
+    def best_val_weight_file_name(self) -> str:
+        return self.DEFAULT_BEST_VAL_WEIGHT_FILE_NAME
+
+    @property
+    def optimizer_state_file_name(self) -> str:
+        return self.DEFAULT_OPTIMIZER_STATE_FILE_NAME
+
+    @property
+    def lr_scheduler_state_file_name(self) -> str:
+        return self.DEFAULT_LR_SCHEDULER_STATE_FILE_NAME
+
+    @property
+    def hist_file_name(self) -> str:
+        return self.DEFAULT_HIST_FILE_NAME
+
+    @property
+    def training_state_file_names(self) -> list[str]:
+        """
+        Files that `fit` writes besides the weights: scheduler states, the
+        training history, and the best-validation weights.
+        
+        They correspond to the weights file. Thus, if the weights file is
+        replaced with another file, the state files indicated by this function
+        should be cleared. 
+        """
+        return [
+            self.optimizer_state_file_name, self.lr_scheduler_state_file_name,
+            self.hist_file_name, self.best_val_weight_file_name
+        ]
+
+    def _path_in_nn_folder(self, file_name: str) -> str:
         assert self.nn_folder is not None
-        return self.get_weight_file_path(self.nn_folder)
+        return os.path.join(self.nn_folder, file_name)
 
-    @staticmethod
-    def make_hist_path(nn_folder):
-        assert nn_folder is not None
-        return os.path.join(nn_folder, "hist.pk")
+    @property
+    def weight_file_path(self) -> str:
+        return self._path_in_nn_folder(self.weight_file_name)
 
-    @staticmethod
-    def get_weight_file_path(folder):
-        return os.path.join(folder, "weights.pth")
+    @property
+    def best_val_weight_file_path(self) -> str:
+        return self._path_in_nn_folder(self.best_val_weight_file_name)
 
-    @staticmethod
-    def get_best_val_weight_file_path(folder):
-        return os.path.join(folder, "weights-best_val.pth")
+    @property
+    def optimizer_state_file_path(self) -> str:
+        return self._path_in_nn_folder(self.optimizer_state_file_name)
 
-    @staticmethod
-    def get_optimizer_state_file_path(folder):
-        return os.path.join(folder, "optimizer.pth")
+    @property
+    def lr_scheduler_state_file_path(self) -> str:
+        return self._path_in_nn_folder(self.lr_scheduler_state_file_name)
 
-    def get_lr_scheduler_state_file_path(self, folder):
-        return os.path.join(folder, "lr_scheduler.pth")
+    @property
+    def hist_file_path(self) -> str:
+        return self._path_in_nn_folder(self.hist_file_name)
 
     def load_weights_from_path(self, path):
         checkpoint = torch.load(path,
@@ -1116,6 +1167,159 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     def save_weights_to_path(self, path):
         gsim_logger.info(f"   💾 Saving weights to {path}")
         torch.save({"weights": self.state_dict()}, path)
+
+    def import_parameters(self,
+                          src_folder: str,
+                          overwrite_if_set: bool = True,
+                          import_training_state: bool = False) -> None:
+        """
+        Copies the weights (and, if present, the normalizer parameters) from
+        `src_folder` into `self.nn_folder`, then loads them into this network.
+
+        The files in `src_folder` are looked up with this network's file names
+        (`weight_file_name`, the normalizer's `params_file_name`), so the
+        source is expected to be a network of the same kind.
+
+        Every check runs before any file is changed, so an import that raises
+        leaves `self.nn_folder` untouched.
+
+        Args:
+
+            `src_folder`: folder to import from. It must differ from
+            `self.nn_folder`.
+
+            `overwrite_if_set`: what to do when `self.nn_folder` already holds
+            a weight file.
+
+                - If True, the import goes ahead and replaces it.
+
+                - If False, nothing is imported. This is useful for
+                  fine-tuning: the first run imports the starting weights;
+                  later runs find the weights and resume from the fine-tuned
+                  checkpoint instead of being reset.
+
+            `import_training_state`: the training state in `self.nn_folder`
+            (cf. `training_state_file_names`) belongs to the weights being
+            replaced, so it is always deleted. If True, the source's training
+            state files are copied in its place, which continues the source's
+            training (same step count, schedule and checkpoints). Leave it
+            False to start a new training history, e.g. to fine-tune on other
+            data.
+
+        Normalizer:
+
+            - If this network has no normalizer, or its normalizer has no
+              folder, only the weights (and, on request, the training state)
+              are imported; a normalizer file in `src_folder` is ignored.
+
+            - If `src_folder` holds a normalizer file, it is imported through
+              `Normalizer.import_parameters`. A normalizer that stores its
+              parameters outside `self.nn_folder` may be shared by other
+              networks, so its existing file is never overwritten: that case
+              raises.
+
+            - If `src_folder` holds none, the normalizer is left as it is.
+              When it has a file, a warning says that the imported weights will
+              be used with it.
+
+        Raises:
+
+            - `FileNotFoundError` if `src_folder` has no weight file.
+
+            - `ValueError` if `self.nn_folder` is None, equals `src_folder`, or
+              the import would overwrite a normalizer file stored outside
+              `self.nn_folder`.
+        """
+
+        # Run all checks first, before any file is changed. 
+
+        if self.nn_folder is None:
+            raise ValueError("Cannot import parameters: `nn_folder` is None.")
+        if os.path.abspath(src_folder) == os.path.abspath(self.nn_folder):
+            raise ValueError(
+                f"Cannot import parameters from {src_folder} into itself.")
+
+        src_weight_file = os.path.join(src_folder, self.weight_file_name)
+        if not os.path.exists(src_weight_file):
+            raise FileNotFoundError(
+                f"Cannot import parameters: {src_weight_file} does not exist.")
+
+        normalizer = self.normalizer
+        dst_normalizer_file = (normalizer.params_file_path
+                               if normalizer is not None else None)
+
+        if os.path.exists(self.weight_file_path) and not overwrite_if_set:
+            if dst_normalizer_file is not None and not os.path.exists(
+                    dst_normalizer_file):
+                # This situation may be intentional or a user mistake
+                gsim_logger.warning(
+                    f"{self.nn_folder} holds weights but its normalizer has no "
+                    f"file ({dst_normalizer_file}).")
+            gsim_logger.info(
+                f"{self.weight_file_path} exists. Skipping the import from "
+                f"{src_folder}.")
+            return
+
+        # Checks for the normalizer, before any file is changed.
+        b_import_normalizer = False
+        if dst_normalizer_file is not None:
+            assert normalizer is not None
+            src_normalizer_file = os.path.join(src_folder,
+                                               normalizer.params_file_name)
+            if os.path.exists(src_normalizer_file):
+                is_in_nn_folder = os.path.abspath(
+                    normalizer.folder) == os.path.abspath(self.nn_folder)
+                if not is_in_nn_folder and os.path.exists(
+                        dst_normalizer_file):
+                    raise ValueError(
+                        f"The normalizer stores its parameters in "
+                        f"{dst_normalizer_file}, outside {self.nn_folder}. "
+                        "This is typically the case when the normalizer is "
+                        "shared with other networks. To prevent data loss, "
+                        "import_parameters does not overwrite normalizer files in these "
+                        f" cases. If this is intentional, delete {dst_normalizer_file} "
+                         " and try again.")
+                b_import_normalizer = True
+            elif os.path.exists(dst_normalizer_file):
+                gsim_logger.warning(
+                    f"{src_folder} holds no normalizer file. The imported "
+                    f"weights will be used with the existing normalizer "
+                    f"{dst_normalizer_file}.")
+
+        l_src_state_files = [
+            f for f in self.training_state_file_names
+            if os.path.exists(os.path.join(src_folder, f))
+        ] if import_training_state else []
+
+        # All checks passed: change the files.
+        os.makedirs(self.nn_folder, exist_ok=True)
+        shutil.copy2(src_weight_file, self.weight_file_path)
+        l_imported = [self.weight_file_name]
+        if b_import_normalizer:
+            assert normalizer is not None
+            normalizer.import_parameters(src_folder, overwrite_if_set=True)
+            l_imported.append(normalizer.params_file_name)
+
+        l_removed = []
+        for file_name in self.training_state_file_names:
+            path = self._path_in_nn_folder(file_name)
+            if os.path.exists(path):
+                os.remove(path)
+                l_removed.append(file_name)
+        if l_removed:
+            gsim_logger.info(
+                f"Removed {', '.join(l_removed)} from {self.nn_folder}: they "
+                "belonged to the replaced weights.")
+        for file_name in l_src_state_files:
+            shutil.copy2(os.path.join(src_folder, file_name),
+                         self._path_in_nn_folder(file_name))
+        l_imported += l_src_state_files
+
+        gsim_logger.info(f"Imported {', '.join(l_imported)} from "
+                         f"{src_folder} into {self.nn_folder}.")
+
+        # Load the imported files into the network (and normalizer).
+        self.initialize()
 
     def make_data_loader(self,
                          dataset: Dataset,
@@ -1162,23 +1366,35 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     def save_hist(self, d_hist):
         if self.nn_folder is not None:
             os.makedirs(self.nn_folder, exist_ok=True)
-            lock = FileLock(self.make_hist_path(self.nn_folder) + ".lock")
+            lock = FileLock(self.hist_file_path + ".lock")
             # Prevent read/write conflicts, which can occur when we plot the
             # training history dynamically.
             with lock:
-                with open(self.make_hist_path(self.nn_folder), "wb") as f:
+                with open(self.hist_file_path, "wb") as f:
                     pickle.dump(d_hist, f)
 
     def load_hist(self) -> TrainingHistory:
-        return self.load_hist_from_folder(self.nn_folder)
+        return self.load_hist_from_folder(self.nn_folder, self.hist_file_name)
 
-    @staticmethod
-    def load_hist_from_folder(nn_folder) -> TrainingHistory:
-        if nn_folder is not None and os.path.exists(
-                NeuralNet.make_hist_path(nn_folder)):
-            lock = FileLock(NeuralNet.make_hist_path(nn_folder) + ".lock")
+    @classmethod
+    def load_hist_from_folder(cls,
+                              nn_folder,
+                              file_name: str | None = None) -> TrainingHistory:
+        """
+        Loads the training history stored in `nn_folder`, without a network
+        instance (e.g. to plot it).
+
+        `file_name` defaults to `DEFAULT_HIST_FILE_NAME`. A network whose
+        `hist_file_name` differs must pass it, or use `load_hist`.
+        """
+        if file_name is None:
+            file_name = cls.DEFAULT_HIST_FILE_NAME
+        path = os.path.join(nn_folder,
+                            file_name) if nn_folder is not None else None
+        if path is not None and os.path.exists(path):
+            lock = FileLock(path + ".lock")
             with lock:
-                with open(NeuralNet.make_hist_path(nn_folder), "rb") as f:
+                with open(path, "rb") as f:
                     hist = pickle.load(f)
             assert isinstance(
                 hist, TrainingHistory
@@ -1675,8 +1891,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 if len(l_val_loss) == 0:
                     return
                 if l_val_loss[-1] == min(l_val_loss):
-                    path_best_val_weights = self.get_best_val_weight_file_path(
-                        self.nn_folder)
+                    path_best_val_weights = self.best_val_weight_file_path
                     gsim_logger.info(f"│ 🎉 val_loss reached a minimum.")
                     self.save_weights_to_path(path_best_val_weights)
 
@@ -1815,13 +2030,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         def save_checkpoint():
             if self.nn_folder is None:
                 return
-            self.save_weights_to_path(self.get_weight_file_path(
-                self.nn_folder))
+            self.save_weights_to_path(self.weight_file_path)
             save_optimizer_state(
-                self.get_optimizer_state_file_path(self.nn_folder))
+                self.optimizer_state_file_path)
             if lr_scheduler is not None:
                 save_lr_scheduler_state(
-                    self.get_lr_scheduler_state_file_path(self.nn_folder))
+                    self.lr_scheduler_state_file_path)
 
             hist.l_step_inds_checkpoints.append(ind_step)
             self.save_hist(hist)
@@ -1829,12 +2043,12 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         def load_checkpoint():
             assert self.nn_folder is not None
             self.load_weights_from_path(
-                self.get_weight_file_path(self.nn_folder))
+                self.weight_file_path)
             load_optimizer_state(
-                self.get_optimizer_state_file_path(self.nn_folder))
+                self.optimizer_state_file_path)
             if lr_scheduler is not None:
                 load_lr_scheduler_state(
-                    self.get_lr_scheduler_state_file_path(self.nn_folder))
+                    self.lr_scheduler_state_file_path)
 
         def save_optimizer_state(path):
             torch.save({"state": optimizer.state_dict()}, path)
@@ -1973,17 +2187,18 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         # Try to load the optimizer state if available in self.nn_folder
         if self.nn_folder is not None:
             load_optimizer_state(
-                self.get_optimizer_state_file_path(self.nn_folder))
+                self.optimizer_state_file_path)
             if lr_scheduler is not None:
                 load_lr_scheduler_state(
-                    self.get_lr_scheduler_state_file_path(self.nn_folder))
+                    self.lr_scheduler_state_file_path)
 
         # Live plotting
         lpprocess = None
         if live_plot and self.nn_folder is not None:
             lpprocess = NeuralNet.live_plot(self.nn_folder,
                                             interval=live_plot_interval,
-                                            background=True)
+                                            background=True,
+                                            file_name=self.hist_file_name)
 
         # Batch provider for the training loop. A single call returns the next
         # batch of `dataloader_train`, transparently starting a new epoch (which
@@ -2021,14 +2236,13 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 hist.l_num_loss_vals_per_step += [num_loss_vals_this_step]
                 hist.l_lr.append(optimizer.param_groups[0]["lr"])
 
-                b_save_checkpoint = (num_steps_checkpoint is not None
-                                     and ind_step > 0
-                                     and ind_step % num_steps_checkpoint == 0)
+                b_consider_saving_checkpoint = self._is_checkpoint_step(
+                    ind_step, num_steps_checkpoint, checkpoint_criterion)
 
                 # Moving-metric reporting
                 if (num_steps_report_training_loss is not None and ind_step
-                        and ind_step % num_steps_report_training_loss
-                        == 0) or b_save_checkpoint:
+                        and ind_step % num_steps_report_training_loss == 0
+                    ) or (b_consider_saving_checkpoint and ind_step > 0):
                     # Not reported when ind_step == 0 because that potentially
                     # results in a very noisy value which may ruin reporting the
                     # best value so far.
@@ -2043,7 +2257,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                     self.save_hist(hist)
 
                 # Checkpointing
-                if b_save_checkpoint:
+                if b_consider_saving_checkpoint:
                     save_checkpoint_if_needed(ind_step, hist)
 
                 # Patience
@@ -2067,9 +2281,39 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         return hist
 
     @staticmethod
+    def _is_checkpoint_step(ind_step: int, num_steps_checkpoint: int | None,
+                            checkpoint_criterion: str) -> bool:
+        """
+        Returns True iff `fit` must consider saving a checkpoint at `ind_step`.
+
+        Step 0 is a special case:
+
+        - It exists only in when the history is empty, because `ind_step` counts
+          steps across sessions (`ind_step = len(hist.l_train_loss_per_step)`).
+
+        - No checkpoint saving should be considered at step 0 when the
+          checkpoint criterion is "train_loss_me": the value after one batch is
+          too noisy to be the bar that later checkpoints must beat.
+
+        - Checkpoint saving should be considered at step 0 when the checkpoint
+          criterion is "val_loss". This is because the validation loss covers
+          the whole validation set and, therefore, the validation loss at step 0
+          is meaningful. In the case of a warm-started run (e.g. after
+          `import_parameters`), saving a checkpoint at step 0 ensures that the
+          starting weights (or more exactly, the starting weights after the
+          first update, which should be similar) are kept unless a later
+          evaluation beats them.
+
+        """
+        return (num_steps_checkpoint is not None
+                and (ind_step > 0 or checkpoint_criterion == "val_loss")
+                and ind_step % num_steps_checkpoint == 0)
+
+    @staticmethod
     def live_plot(nn_folder: str,
                   interval=1000,
-                  background: bool = False) -> multiprocessing.Process | None:
+                  background: bool = False,
+                  file_name: str | None = None) -> multiprocessing.Process | None:
         """
         It starts a figure that is periodically refreshed to show the latest
         training history stored in `nn_folder`.
@@ -2082,6 +2326,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
             `background`: If True, the live plot is started in a separate
             process and a handle to this process is returned. 
+
+            `file_name`: name of the training-history file; defaults to
+            `DEFAULT_HIST_FILE_NAME` (cf. `load_hist_from_folder`).
         """
 
         def launch_in_background() -> 'multiprocessing.Process':
@@ -2094,7 +2341,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                                    kwargs={
                                                        "nn_folder": nn_folder,
                                                        "interval": interval,
-                                                       "background": False
+                                                       "background": False,
+                                                       "file_name": file_name
                                                    })
             plot_process.start()
             return plot_process
@@ -2103,7 +2351,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             return launch_in_background()
 
         def make_figure():
-            hist = NeuralNet.load_hist_from_folder(nn_folder)
+            hist = NeuralNet.load_hist_from_folder(nn_folder, file_name)
             return NeuralNet.plot_training_history(hist)[0]
 
         G = GFigure.make_periodically_refreshing_figure(
@@ -2554,3 +2802,54 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     def print_num_parameters(self):
         total_params = sum(p.numel() for p in self.parameters())
         print(f'Total number of parameters: {total_params}')
+
+    # Deprecated path helpers ###################################################
+    #
+    # They take a folder and use the class's default file names. Use the
+    # instance properties instead (`weight_file_path`,
+    # `optimizer_state_file_path`, ...), which follow a subclass's file names.
+
+    @classmethod
+    def make_hist_path(cls, nn_folder):
+        warnings.warn(
+            "`NeuralNet.make_hist_path` is deprecated; use the "
+            "`hist_file_path` property.",
+            DeprecationWarning,
+            stacklevel=2)
+        assert nn_folder is not None
+        return os.path.join(nn_folder, cls.DEFAULT_HIST_FILE_NAME)
+
+    @classmethod
+    def get_weight_file_path(cls, folder):
+        warnings.warn(
+            "`NeuralNet.get_weight_file_path` is deprecated; use the "
+            "`weight_file_path` property.",
+            DeprecationWarning,
+            stacklevel=2)
+        return os.path.join(folder, cls.DEFAULT_WEIGHT_FILE_NAME)
+
+    @classmethod
+    def get_best_val_weight_file_path(cls, folder):
+        warnings.warn(
+            "`NeuralNet.get_best_val_weight_file_path` is deprecated; use the "
+            "`best_val_weight_file_path` property.",
+            DeprecationWarning,
+            stacklevel=2)
+        return os.path.join(folder, cls.DEFAULT_BEST_VAL_WEIGHT_FILE_NAME)
+
+    @classmethod
+    def get_optimizer_state_file_path(cls, folder):
+        warnings.warn(
+            "`NeuralNet.get_optimizer_state_file_path` is deprecated; use the "
+            "`optimizer_state_file_path` property.",
+            DeprecationWarning,
+            stacklevel=2)
+        return os.path.join(folder, cls.DEFAULT_OPTIMIZER_STATE_FILE_NAME)
+
+    def get_lr_scheduler_state_file_path(self, folder):
+        warnings.warn(
+            "`NeuralNet.get_lr_scheduler_state_file_path` is deprecated; use "
+            "the `lr_scheduler_state_file_path` property.",
+            DeprecationWarning,
+            stacklevel=2)
+        return os.path.join(folder, self.lr_scheduler_state_file_name)

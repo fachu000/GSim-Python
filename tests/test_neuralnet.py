@@ -1,4 +1,6 @@
 import logging
+import os
+import pickle
 
 import numpy as np
 import pytest
@@ -8,6 +10,7 @@ from torch.utils.data import Dataset, IterableDataset
 
 from gsim.include.neural_net import NeuralNet, WeightedLoss
 from gsim.include.neural_net.neural_net import TrainingHistory
+from gsim.include.neural_net.normalizers import DefaultNormalizer
 from gsim.include.utils.statistics import mean_and_ci
 
 
@@ -1185,3 +1188,379 @@ def test_mean_and_ci_weighted_mean():
     mean, hci = mean_and_ci(l_vals, weights=l_weights)
     assert np.isclose(mean, 3.4)
     assert np.isfinite(hci)
+
+
+# Tests for import_parameters ##################################################
+
+
+class _NormalizedNet(NeuralNet):
+    """`_TrainableNet` with a normalizer, so that it has a normalizer file."""
+
+    def __init__(self, nn_folder=None, normalizer_folder=None):
+        super().__init__(nn_folder=nn_folder,
+                         normalizer=DefaultNormalizer(mode="both",
+                                                      folder=normalizer_folder))
+        self.linear = nn.Linear(4, 1)
+        self.initialize()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear(x)
+
+
+class TestImportParameters:
+
+    @staticmethod
+    def _make_src(folder, with_normalizer=True) -> _NormalizedNet:
+        """Writes weights (and normalizer parameters) into `folder`."""
+        torch.manual_seed(1)
+        net = _NormalizedNet(nn_folder=str(folder))
+        if with_normalizer:
+            net.normalizer.fit(_TinyDataset())
+            net.normalizer.save()
+        net.save_weights_to_path(net.weight_file_path)
+        return net
+
+    @staticmethod
+    def _make_dst(folder, normalizer_folder=None) -> _NormalizedNet:
+        torch.manual_seed(2)
+        return _NormalizedNet(nn_folder=str(folder),
+                              normalizer_folder=normalizer_folder)
+
+    @staticmethod
+    def _equal_weights(net_a, net_b) -> bool:
+        return all(
+            torch.equal(a, b)
+            for a, b in zip(net_a.state_dict().values(),
+                            net_b.state_dict().values()))
+
+    @staticmethod
+    def _fit_normalizer_differently(net):
+        net.normalizer.fit(_TinyDataset(seed=5))
+        net.normalizer.save()
+
+    def test_copies_and_reloads(self, tmp_path):
+        src = self._make_src(tmp_path / "src")
+        dst = self._make_dst(tmp_path / "dst")
+        assert not self._equal_weights(src, dst)
+        assert not dst.normalizer.are_parameters_set
+
+        dst.import_parameters(src.nn_folder)
+
+        assert os.path.exists(dst.weight_file_path)
+        assert os.path.exists(dst.normalizer.params_file_path)
+        assert self._equal_weights(src, dst)
+        assert dst.normalizer.are_parameters_set
+        assert torch.equal(dst.normalizer.input_batch_mean,
+                           src.normalizer.input_batch_mean)
+
+    def test_skips_when_weights_exist_and_not_overwrite(self, tmp_path):
+        src = self._make_src(tmp_path / "src")
+        dst = self._make_src(tmp_path / "dst")
+        with torch.no_grad():
+            dst.linear.weight.add_(1.0)
+        dst.save_weights_to_path(dst.weight_file_path)
+        v_before = dst.linear.weight.clone()
+
+        dst.import_parameters(src.nn_folder, overwrite_if_set=False)
+
+        assert torch.equal(dst.linear.weight, v_before)
+        reloaded = _NormalizedNet(nn_folder=dst.nn_folder)
+        assert torch.equal(reloaded.linear.weight, v_before)
+
+    def test_skip_warns_when_normalizer_file_is_missing(self, tmp_path, caplog):
+        src = self._make_src(tmp_path / "src")
+        dst = self._make_dst(tmp_path / "dst")
+        dst.save_weights_to_path(dst.weight_file_path)  # no normalizer file
+
+        with caplog.at_level(logging.WARNING, logger="gsim"):
+            dst.import_parameters(src.nn_folder, overwrite_if_set=False)
+
+        assert "normalizer has no file" in caplog.text
+        assert not os.path.exists(dst.normalizer.params_file_path)
+
+    def test_overwrites_when_overwrite(self, tmp_path):
+        src = self._make_src(tmp_path / "src")
+        dst = self._make_src(tmp_path / "dst")
+        with torch.no_grad():
+            dst.linear.weight.add_(1.0)
+        dst.save_weights_to_path(dst.weight_file_path)
+
+        dst.import_parameters(src.nn_folder, overwrite_if_set=True)
+
+        assert self._equal_weights(src, dst)
+
+    def test_missing_source_weights_raise(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        dst = self._make_dst(tmp_path / "dst")
+        with pytest.raises(FileNotFoundError, match="weights.pth"):
+            dst.import_parameters(str(tmp_path / "src"))
+
+    def test_source_without_normalizer_keeps_the_existing_one(
+            self, tmp_path, caplog):
+        src = self._make_src(tmp_path / "src", with_normalizer=False)
+        dst = self._make_dst(tmp_path / "dst")
+        self._fit_normalizer_differently(dst)
+        v_mean_before = dst.normalizer.input_batch_mean.clone()
+
+        with caplog.at_level(logging.WARNING, logger="gsim"):
+            dst.import_parameters(src.nn_folder)
+
+        assert "existing normalizer" in caplog.text
+        assert self._equal_weights(src, dst)
+        assert torch.equal(dst.normalizer.input_batch_mean, v_mean_before)
+
+    def test_shared_normalizer_file_is_not_overwritten(self, tmp_path):
+        src = self._make_src(tmp_path / "src")
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        dst = self._make_dst(tmp_path / "dst", normalizer_folder=str(shared))
+        self._fit_normalizer_differently(dst)
+        v_before = dst.linear.weight.clone()
+
+        with pytest.raises(ValueError, match="shared"):
+            dst.import_parameters(src.nn_folder)
+
+        # The checks run before any file changes.
+        assert not os.path.exists(dst.weight_file_path)
+        assert torch.equal(dst.linear.weight, v_before)
+
+    def test_shared_normalizer_without_file_is_imported(self, tmp_path):
+        src = self._make_src(tmp_path / "src")
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        dst = self._make_dst(tmp_path / "dst", normalizer_folder=str(shared))
+
+        dst.import_parameters(src.nn_folder)
+
+        assert (shared / "normalizer.pk").exists()
+        assert torch.equal(dst.normalizer.input_batch_mean,
+                           src.normalizer.input_batch_mean)
+
+    def test_destination_training_state_is_removed(self, tmp_path):
+        src = self._make_src(tmp_path / "src")
+        dst = self._make_dst(tmp_path / "dst")
+        for file_name in dst.training_state_file_names:
+            (tmp_path / "dst" / file_name).write_bytes(b"stale")
+
+        dst.import_parameters(src.nn_folder)
+
+        for file_name in dst.training_state_file_names:
+            assert not (tmp_path / "dst" / file_name).exists()
+
+    def test_training_state_is_copied_on_request(self, tmp_path):
+        src = self._make_src(tmp_path / "src")
+        (tmp_path / "src" / src.optimizer_state_file_name).write_bytes(b"src")
+        dst = self._make_dst(tmp_path / "dst")
+        (tmp_path / "dst" / dst.hist_file_name).write_bytes(b"stale")
+
+        dst.import_parameters(src.nn_folder, import_training_state=True)
+
+        assert (tmp_path / "dst" /
+                dst.optimizer_state_file_name).read_bytes() == b"src"
+        # Not in the source, so the stale one is not left behind.
+        assert not (tmp_path / "dst" / dst.hist_file_name).exists()
+
+    def test_same_folder_raises(self, tmp_path):
+        src = self._make_src(tmp_path / "src")
+        with pytest.raises(ValueError, match="into itself"):
+            src.import_parameters(src.nn_folder)
+
+    def test_network_without_normalizer_imports_the_weights(self, tmp_path):
+        src = self._make_src(tmp_path / "src")  # also writes normalizer.pk
+        torch.manual_seed(2)
+        dst = _TrainableNet(nn_folder=str(tmp_path / "dst"))
+        assert dst.normalizer is None
+
+        dst.import_parameters(src.nn_folder)
+
+        assert self._equal_weights(src, dst)
+        assert not (tmp_path / "dst" / "normalizer.pk").exists()
+
+
+class TestNormalizerImportParameters:
+
+    def test_copies_and_loads(self, tmp_path):
+        src = DefaultNormalizer(mode="both", folder=str(tmp_path / "src"))
+        (tmp_path / "src").mkdir()
+        src.fit(_TinyDataset())
+        src.save()
+        dst = DefaultNormalizer(mode="both", folder=str(tmp_path / "dst"))
+
+        dst.import_parameters(str(tmp_path / "src"))
+
+        assert dst.are_parameters_set
+        assert torch.equal(dst.input_batch_mean, src.input_batch_mean)
+
+    def test_skips_when_set_and_not_overwrite(self, tmp_path):
+        for name, seed in (("src", 0), ("dst", 5)):
+            (tmp_path / name).mkdir()
+            n = DefaultNormalizer(mode="both", folder=str(tmp_path / name))
+            n.fit(_TinyDataset(seed=seed))
+            n.save()
+        dst = DefaultNormalizer(mode="both", folder=str(tmp_path / "dst"))
+        dst.load_if_file_exists()
+        v_before = dst.input_batch_mean.clone()
+
+        dst.import_parameters(str(tmp_path / "src"), overwrite_if_set=False)
+
+        assert torch.equal(dst.input_batch_mean, v_before)
+
+    def test_missing_source_raises(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        dst = DefaultNormalizer(mode="both", folder=str(tmp_path / "dst"))
+        with pytest.raises(FileNotFoundError, match="normalizer.pk"):
+            dst.import_parameters(str(tmp_path / "src"))
+
+
+class TestFileNames:
+
+    def test_paths_follow_the_names(self, tmp_path):
+        net = _NormalizedNet(nn_folder=str(tmp_path))
+        assert net.weight_file_path == os.path.join(str(tmp_path),
+                                                    "weights.pth")
+        assert net.hist_file_path == os.path.join(
+            str(tmp_path), NeuralNet.DEFAULT_HIST_FILE_NAME)
+        assert net.normalizer.params_file_path == os.path.join(
+            str(tmp_path), "normalizer.pk")
+
+    def test_deprecated_helpers_warn_and_agree(self, tmp_path):
+        net = _NormalizedNet(nn_folder=str(tmp_path))
+        folder = str(tmp_path)
+        with pytest.warns(DeprecationWarning):
+            assert NeuralNet.get_weight_file_path(
+                folder) == net.weight_file_path
+        with pytest.warns(DeprecationWarning):
+            assert NeuralNet.get_optimizer_state_file_path(
+                folder) == net.optimizer_state_file_path
+        with pytest.warns(DeprecationWarning):
+            assert net.get_lr_scheduler_state_file_path(
+                folder) == net.lr_scheduler_state_file_path
+        with pytest.warns(DeprecationWarning):
+            assert NeuralNet.make_hist_path(folder) == net.hist_file_path
+        with pytest.warns(DeprecationWarning):
+            assert net.normalizer.params_file == net.normalizer.params_file_path
+
+    def test_a_subclass_default_is_respected_everywhere(self, tmp_path):
+
+        class _RenamedNet(_TrainableNet):
+            DEFAULT_WEIGHT_FILE_NAME = "renamed.pth"
+
+        net = _RenamedNet(nn_folder=str(tmp_path))
+        assert net.weight_file_path == os.path.join(str(tmp_path),
+                                                    "renamed.pth")
+        with pytest.warns(DeprecationWarning):
+            assert _RenamedNet.get_weight_file_path(
+                str(tmp_path)) == net.weight_file_path
+
+    def test_load_hist_from_folder_takes_a_file_name(self, tmp_path):
+        net = _TrainableNet(nn_folder=str(tmp_path))
+        hist = TrainingHistory()
+        hist.l_train_loss_per_step = [1.0, 2.0]
+        with open(tmp_path / "other_hist.pk", "wb") as f:
+            pickle.dump(hist, f)
+
+        loaded = NeuralNet.load_hist_from_folder(str(tmp_path),
+                                                 file_name="other_hist.pk")
+
+        assert loaded.l_train_loss_per_step == [1.0, 2.0]
+        assert NeuralNet.load_hist_from_folder(
+            str(tmp_path)).l_train_loss_per_step == []
+
+
+# Tests for the step-0 checkpoint ##############################################
+
+
+class TestCheckpointAtStepZero:
+
+    BATCH_SIZE = 5
+    NUM_STEPS = 12
+
+    @staticmethod
+    def _make_datasets():
+        """
+        Training and validation sets with the same inputs and opposite
+        targets.
+        -> Starting from zero weights, every training step moves the weights
+           away from the validation optimum, so the validation loss only rises.
+        """
+        dataset_train = _TinyDataset()
+        dataset_val = _TinyDataset()
+        dataset_val.y = -dataset_val.y
+        return dataset_train, dataset_val
+
+    def _fit(self, net, **kwargs):
+        dataset_train, dataset_val = self._make_datasets()
+        opt = torch.optim.SGD(net.parameters(), lr=1e-2)
+        return net.fit(dataset_train,
+                       opt,
+                       _mse,
+                       dataset_val=dataset_val,
+                       num_steps=self.NUM_STEPS,
+                       batch_size=self.BATCH_SIZE,
+                       shuffle=False,
+                       num_steps_eval=4,
+                       restore_best_checkpoint=False,
+                       training_loss_forgetting_factor=0.9,
+                       **kwargs)
+
+    @staticmethod
+    def _make_zero_net(folder):
+        net = _TrainableNet(nn_folder=str(folder))
+        with torch.no_grad():
+            for p in net.parameters():
+                p.zero_()
+        return net
+
+    def test_val_loss_keeps_step_zero_when_val_loss_only_rises(
+            self, tmp_path, caplog):
+        net = self._make_zero_net(tmp_path)
+        with caplog.at_level(logging.INFO, logger='gsim'):
+            hist = self._fit(net, checkpoint_criterion='val_loss')
+
+        l_val_loss = [v for _, v in hist.l_val_loss]
+        assert l_val_loss == sorted(l_val_loss) and len(set(l_val_loss)) > 1
+        assert hist.l_step_inds_checkpoints == [0]
+
+        # weights.pth holds the weights that the step-0 evaluation measured.
+        saved = _TrainableNet(nn_folder=str(tmp_path))
+        _, dataset_val = self._make_datasets()
+        with torch.no_grad():
+            val_loss = _mse(saved(dataset_val.x), dataset_val.y).mean()
+        assert np.isclose(val_loss.item(), hist.l_val_loss[0][1], rtol=1e-5)
+
+        # The moving estimate is still not reported at step 0.
+        assert 0 not in TestFitStepIntervals._reported_train_loss_me_steps(
+            caplog)
+
+    def test_train_loss_me_skips_step_zero(self, tmp_path):
+        net = self._make_zero_net(tmp_path)
+        hist = self._fit(net,
+                         checkpoint_criterion='train_loss_me',
+                         num_steps_checkpoint=4)
+        assert len(hist.l_step_inds_checkpoints) > 0
+        assert 0 not in hist.l_step_inds_checkpoints
+
+    def test_resumed_session_follows_the_rule_for_positive_steps(
+            self, tmp_path):
+        net = self._make_zero_net(tmp_path)
+        self._fit(net, checkpoint_criterion='val_loss')
+        hist = self._fit(net, checkpoint_criterion='val_loss')
+        ind_start = hist.l_step_inds_started_training[-1]
+        assert ind_start > 0
+        # The second session only adds checkpoints at its own steps.
+        assert all(s >= ind_start
+                   for s in hist.l_step_inds_checkpoints[1:])
+
+    @pytest.mark.parametrize("checkpoint_criterion",
+                             ["val_loss", "train_loss_me", "always"])
+    def test_is_checkpoint_step_unchanged_for_positive_steps(
+            self, checkpoint_criterion):
+        for num_steps_checkpoint in [1, 4]:
+            for ind_step in range(1, 20):
+                assert NeuralNet._is_checkpoint_step(
+                    ind_step, num_steps_checkpoint, checkpoint_criterion) == (
+                        ind_step % num_steps_checkpoint == 0)
+        assert not NeuralNet._is_checkpoint_step(5, None,
+                                                 checkpoint_criterion)
+        assert NeuralNet._is_checkpoint_step(
+            0, 4, checkpoint_criterion) == (checkpoint_criterion == "val_loss")

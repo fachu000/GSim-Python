@@ -55,7 +55,9 @@ import functools
 import logging
 import os
 import pickle
+import shutil
 import tempfile
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Sized
 from typing import Callable, Generic, Literal, TypeVar, Union
@@ -129,9 +131,9 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
             for param in self.l_params_to_save
         }
 
-        assert self.params_file is not None
+        assert self.params_file_path is not None
         if os.path.exists(self.folder):
-            with open(self.params_file, "wb") as f:
+            with open(self.params_file_path, "wb") as f:
                 pickle.dump(d_params, f)
 
     def load_if_file_exists(self):
@@ -142,22 +144,76 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
         However, it is preferable to to define setters and getters for the
         parameters indicated by self.l_params_to_save.
         """
-        if self.params_file is None or not os.path.exists(self.params_file):
+        path = self.params_file_path
+        if path is None or not os.path.exists(path):
             return
-        with open(self.params_file, "rb") as f:
+        with open(path, "rb") as f:
             d_params = pickle.load(f)
             for param in self.l_params_to_save:
-                assert param in d_params, f"{param} not found in {self.params_file}."
+                assert param in d_params, f"{param} not found in {path}."
                 setattr(self, param, d_params[param])
-        gsim_logger.info(f"Normalizer loaded from {self.params_file}")
+        gsim_logger.info(f"Normalizer loaded from {path}")
         self.are_parameters_set = True
 
     @property
-    def params_file(self):
+    def params_file_name(self) -> str:
+        """
+        Name of the file that stores the parameters. A property so that a
+        subclass can override it.
+        """
+        return "normalizer.pk"
+
+    @property
+    def params_file_path(self) -> str | None:
+        """
+        Path of the file that stores the parameters, or None if the
+        normalizer has no folder (then `save` and `load_if_file_exists` do
+        nothing).
+        """
         if not self.folder:
             return None
         assert isinstance(self.folder, str), "Invalid value for `self.folder`."
-        return os.path.join(self.folder, "normalizer.pk")
+        return os.path.join(self.folder, self.params_file_name)
+
+    def import_parameters(self,
+                          src_folder: str,
+                          overwrite_if_set: bool = True) -> None:
+        """
+        Copies the parameter file from `src_folder` into `self.folder`, then
+        loads it.
+
+        Args:
+
+            `src_folder`: folder holding a file named `params_file_name`.
+
+            `overwrite_if_set`: if False and `self.folder` already holds the
+            file, nothing is copied or loaded.
+
+        Raises:
+
+            - `ValueError` if the normalizer has no folder, or `src_folder` is
+              `self.folder`.
+
+            - `FileNotFoundError` if `src_folder` has no parameter file.
+        """
+        dst = self.params_file_path
+        if dst is None:
+            raise ValueError(
+                "Cannot import parameters: the normalizer has no folder.")
+        src = os.path.join(src_folder, self.params_file_name)
+        if os.path.abspath(src) == os.path.abspath(dst):
+            raise ValueError(
+                f"Cannot import normalizer parameters from {src} into itself.")
+        if not os.path.exists(src):
+            raise FileNotFoundError(
+                f"Cannot import normalizer parameters: {src} does not exist.")
+        if os.path.exists(dst) and not overwrite_if_set:
+            gsim_logger.info(
+                f"{dst} exists. Skipping the import from {src_folder}.")
+            return
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        self.load_if_file_exists()
 
     @abstractmethod
     def normalize_input_batch(self, input_batch: InputType) -> InputType:
@@ -224,6 +280,14 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
         input_batch, targets_batch = l_batch
         return (self.normalize_input_batch(input_batch),
                 self.normalize_targets_batch(targets_batch))
+
+    @property
+    def params_file(self):
+        warnings.warn(
+            "`Normalizer.params_file` is deprecated; use `params_file_path`.",
+            DeprecationWarning,
+            stacklevel=2)
+        return self.params_file_path
 
 
 class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
