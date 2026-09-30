@@ -1564,3 +1564,71 @@ class TestCheckpointAtStepZero:
                                                  checkpoint_criterion)
         assert NeuralNet._is_checkpoint_step(
             0, 4, checkpoint_criterion) == (checkpoint_criterion == "val_loss")
+
+
+class _StopRequestingNet(_TrainableNet):
+    """Creates the stop file during training step `ind_step_request` (0-based),
+    as a user would from outside while `fit` runs."""
+
+    def __init__(self, nn_folder, ind_step_request):
+        super().__init__(nn_folder=nn_folder)
+        self.ind_step_request = ind_step_request
+        self.num_training_forwards = 0
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training:
+            if self.num_training_forwards == self.ind_step_request:
+                open(self.stop_file_path, "w").close()
+            self.num_training_forwards += 1
+        return super().forward(x)
+
+
+class TestStopFile:
+
+    BATCH_SIZE = 5
+    NUM_STEPS = 20
+
+    def _fit(self, net, **kwargs):
+        opt = torch.optim.SGD(net.parameters(), lr=1e-2)
+        kwargs.setdefault('checkpoint_criterion', 'train_loss_me')
+        kwargs.setdefault('num_steps_checkpoint', 4)
+        kwargs.setdefault('training_loss_forgetting_factor', 0.9)
+        return net.fit(_TinyDataset(),
+                       opt,
+                       _mse,
+                       num_steps=self.NUM_STEPS,
+                       batch_size=self.BATCH_SIZE,
+                       shuffle=False,
+                       restore_best_checkpoint=False,
+                       **kwargs)
+
+    def test_stops_at_the_next_checkpoint_step(self, tmp_path):
+        net = _StopRequestingNet(str(tmp_path), ind_step_request=5)
+        hist = self._fit(net)
+        # Requested during step 5; the next checkpoint step is 8.
+        assert len(hist.l_train_loss_per_step) == 9
+        assert hist.l_step_inds_checkpoints[-1] == 8
+        assert not os.path.exists(net.stop_file_path)
+        assert os.path.exists(net.stop_file_path + ".done")
+
+    def test_resumes_after_a_stop(self, tmp_path):
+        net = _StopRequestingNet(str(tmp_path), ind_step_request=5)
+        self._fit(net)
+        net.ind_step_request = -1  # no new request
+        hist = self._fit(net)
+        assert hist.l_step_inds_started_training == [0, 9]
+        assert len(hist.l_train_loss_per_step) == 9 + self.NUM_STEPS
+
+    def test_ignores_a_file_left_from_before_the_session(self, tmp_path):
+        net = _TrainableNet(nn_folder=str(tmp_path))
+        open(net.stop_file_path, "w").close()
+        hist = self._fit(net)
+        assert len(hist.l_train_loss_per_step) == self.NUM_STEPS
+        assert os.path.exists(net.stop_file_path + ".done")
+
+    def test_without_checkpoints_stops_after_the_current_step(self, tmp_path):
+        net = _StopRequestingNet(str(tmp_path), ind_step_request=5)
+        hist = self._fit(net,
+                         checkpoint_criterion='never',
+                         num_steps_checkpoint=None)
+        assert len(hist.l_train_loss_per_step) == 6

@@ -333,6 +333,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     DEFAULT_OPTIMIZER_STATE_FILE_NAME = "optimizer.pth"
     DEFAULT_LR_SCHEDULER_STATE_FILE_NAME = "lr_scheduler.pth"
     DEFAULT_HIST_FILE_NAME = "hist.pk"
+    # Creating this file asks a running `fit` to stop at its next checkpoint
+    # step; see the NOTES in `fit`. `fit` renames it with this suffix once
+    # handled.
+    DEFAULT_STOP_FILE_NAME = "STOP"
+    STOP_FILE_DONE_SUFFIX = ".done"
 
     def __init__(self,
                  *args,
@@ -1116,6 +1121,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         return self.DEFAULT_HIST_FILE_NAME
 
     @property
+    def stop_file_name(self) -> str:
+        return self.DEFAULT_STOP_FILE_NAME
+
+    @property
     def training_state_file_names(self) -> list[str]:
         """
         Files that `fit` writes besides the weights: scheduler states, the
@@ -1153,6 +1162,16 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     @property
     def hist_file_path(self) -> str:
         return self._path_in_nn_folder(self.hist_file_name)
+
+    @property
+    def stop_file_path(self) -> str:
+        return self._path_in_nn_folder(self.stop_file_name)
+
+    def _retire_stop_file(self) -> None:
+        """Renames the stop file, if any, so that it takes effect only once."""
+        path = self.stop_file_path
+        if os.path.exists(path):
+            os.replace(path, path + self.STOP_FILE_DONE_SUFFIX)
 
     def load_weights_from_path(self, path):
         checkpoint = torch.load(path,
@@ -1473,6 +1492,16 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
               because the losses change. If you do not do this, a checkpoint
               will not be saved until the values of the new (e.g. validation)
               loss are lower than the values of the old (validation) loss.
+
+            - To stop a running `fit` cleanly, e.g. to move training to another
+              machine, create the file `self.nn_folder/STOP`. At its next
+              checkpoint step, `fit` saves a checkpoint if
+              `checkpoint_criterion` calls for one, and then returns as if
+              `num_steps` had been reached. Rerunning `fit` resumes from the
+              last checkpoint. Without checkpoints (`num_steps_checkpoint` is
+              None), `fit` stops after the current step. `fit` renames the file
+              to `STOP.done` when it stops, and also when it starts, so a file
+              left from an earlier session does not stop the new one.
 
         Args:
             `dataset` (Dataset): The training dataset.
@@ -2186,6 +2215,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
 
         # Try to load the optimizer state if available in self.nn_folder
         if self.nn_folder is not None:
+            if os.path.exists(self.stop_file_path):
+                gsim_logger.warning(
+                    f"Ignoring {self.stop_file_path}, created before this "
+                    "session started.")
+                self._retire_stop_file()
             load_optimizer_state(
                 self.optimizer_state_file_path)
             if lr_scheduler is not None:
@@ -2259,6 +2293,18 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 # Checkpointing
                 if b_consider_saving_checkpoint:
                     save_checkpoint_if_needed(ind_step, hist)
+
+                # Stop request (see the NOTES in the docstring)
+                if (self.nn_folder is not None
+                        and (b_consider_saving_checkpoint
+                             or num_steps_checkpoint is None)
+                        and os.path.exists(self.stop_file_path)):
+                    gsim_logger.info(
+                        f"Step {ind_step}: stop requested by "
+                        f"{self.stop_file_path}. Stopping training.")
+                    self._retire_stop_file()
+                    done = True
+                    break
 
                 # Patience
                 if is_patience_exhausted(hist):
