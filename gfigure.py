@@ -2058,6 +2058,39 @@ def plot_example_figure(ind_example):
                         yaxis=v_samples,
                         styles='.#0')
 
+    elif ind_example == 18:
+        if __package__:
+            from .include.utils.statistics import mean_and_ci
+        else:
+            from include.utils.statistics import mean_and_ci
+
+        # Running averages of one realization of constant + Gaussian noise.
+        max_num_samples = 200
+        true_mean = 2.0
+        noise_std = 1.0
+        rng = np.random.default_rng(0)
+        # mean_and_ci requires at least two samples to estimate the variance.
+        v_num_samples = np.arange(2, max_num_samples + 1)
+        v_samples = true_mean + rng.normal(scale=noise_std,
+                                          size=max_num_samples)
+        # Compute the mean and 95% CI for each prefix of the same realization.
+        v_mean, v_half_width = np.array([
+            mean_and_ci(v_samples[:num_samples])
+            for num_samples in v_num_samples
+        ]).T
+        G = GFigure(xaxis=v_num_samples,
+                    yaxis=v_mean,
+                    ylower=v_mean - v_half_width,
+                    yupper=v_mean + v_half_width,
+                    xlabel='Number of samples N',
+                    ylabel='Estimated constant',
+                    title='Average of noisy observations of a constant and CI error bands',
+                    legend='Running average and 95% CI')
+        G.add_curve(xaxis=v_num_samples,
+                    yaxis=np.full(len(v_num_samples), true_mean),
+                    styles='--k',
+                    legend='True constant')
+
     else:
         raise ValueError("Invalid example index")
 
