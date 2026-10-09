@@ -55,3 +55,21 @@ if b_check_locs_similarity:
 ```
 
 - Public methods should have docstrings. 
+
+- Every new or modified function that takes or returns at least one matrix-like object (vector, list, tuple of arrays, tensor, dataframe, series, dataset) must have an `Args` section and a `Returns` section in its docstring, with one item per argument and per returned value. Items are separated by an empty line. The item for a matrix-like object gives its size and states clearly what each entry contains, e.g.
+```python
+def get_comp_feats(self, s_subject, df_comparables):
+    """
+    Args:
+        s_subject: Series with the fields of the subject        
+            indexed by field name.
+
+        df_comparables: num_comparables x num_fields DataFrame; the i-th row holds 
+            the fields of the i-th comparable.
+
+    Returns:
+        num_comparables x num_comp_feats tensor whose (i, j)-th entry is the value of 
+            the j-th feature of the i-th comparable.
+    """
+```
+  Name each dimension by what it counts (`num_comparables`, `num_comp_feats`), not only by a number.
