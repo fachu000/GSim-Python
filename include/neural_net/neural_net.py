@@ -1423,6 +1423,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             hist = TrainingHistory()
         return hist
 
+    # Gradients are enabled so that `fit` also works when called in a context
+    # where they are disabled, e.g. from the `forward` of another network
+    # invoked by `predict` (as when a metanetwork fits a network per task).
+    @torch.enable_grad()
     def fit(self,
             dataset: Dataset,
             optimizer: torch.optim.Optimizer,

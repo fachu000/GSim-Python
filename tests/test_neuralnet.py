@@ -458,6 +458,21 @@ def _mse(output, target):
     return ((output - target)**2).squeeze(-1)
 
 
+def test_fit_works_when_gradients_are_disabled():
+    """`fit` must train even if called with gradients disabled, e.g. from the
+    `forward` of another network invoked by `predict`."""
+    net = _TrainableNet()
+    t_weights_before = net.linear.weight.detach().clone()
+    with torch.no_grad():
+        net.fit(_TinyDataset(),
+                torch.optim.Adam(net.parameters(), lr=1e-2),
+                _mse,
+                num_steps=4,
+                batch_size=5,
+                restore_best_checkpoint=False)
+    assert not torch.equal(t_weights_before, net.linear.weight)
+
+
 class TestFitStepIntervals:
     """End-to-end tests for resolve_fit_schedule logic inside NeuralNet.fit."""
 
