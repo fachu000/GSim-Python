@@ -615,3 +615,28 @@ class TestStdFeatNormalizerNumericalStability:
 
         sample = torch.tensor(v_dates[:16], dtype=torch.float32)
         assert torch.allclose(fitted.normalize(sample), restored.normalize(sample))
+
+
+@pytest.mark.parametrize("make_normalizer", [
+    lambda: DefaultNormalizer(mode="both"),
+    lambda: MultiFeatNormalizer(input_normalizers=[StdFeatNormalizer()] * 3,
+                                targets_normalizers=[StdFeatNormalizer()],
+                                batch_size=10),
+])
+def test_fit_accepts_a_list_of_pairs(make_normalizer):
+    """Fitting on a list of (input, target) pairs gives the same result as
+    fitting on a Dataset with the same pairs."""
+    inputs = torch.randn(50, 3) * 10 + 5
+    targets = torch.randn(50, 1) * 5 + 10
+    dataset = SimpleDataset(inputs, targets)
+    l_pairs = [dataset[ind] for ind in range(len(dataset))]
+
+    norm_dataset = make_normalizer()
+    norm_dataset.fit(dataset)
+    norm_list = make_normalizer()
+    norm_list.fit(l_pairs)
+
+    assert torch.allclose(norm_list.normalize_input_batch(inputs),
+                          norm_dataset.normalize_input_batch(inputs))
+    assert torch.allclose(norm_list.normalize_targets_batch(targets),
+                          norm_dataset.normalize_targets_batch(targets))

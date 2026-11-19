@@ -59,7 +59,7 @@ import shutil
 import tempfile
 import warnings
 from abc import ABC, abstractmethod
-from collections.abc import Sized
+from collections.abc import Sequence, Sized
 from typing import Callable, Generic, Literal, TypeVar, Union
 
 import numpy as np
@@ -105,20 +105,21 @@ class Normalizer(ABC, Generic[InputType, OutputType, TargetType]):
         # its parameters have been loaded from a file.
         self.are_parameters_set = False
 
-    def fit(self, dataset: Dataset):
+    def fit(self, dataset: Dataset | Sequence):
         """
         Fit the normalizer to the dataset.
 
         Args:
 
-            `dataset`: dataset used to fit the normalizer.
+            `dataset`: dataset used to fit the normalizer: a torch Dataset or
+            a sequence (e.g. a list) of pairs (input, targets).
 
         """
         self._fit(dataset)
         self.are_parameters_set = True
 
     @abstractmethod
-    def _fit(self, dataset: Dataset):
+    def _fit(self, dataset: Dataset | Sequence):
         pass
 
     def save(self):
@@ -331,9 +332,7 @@ class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
         self.targets_batch_mean: torch.Tensor | None = None  # same shape as the targets
         self.targets_batch_std: torch.Tensor | None = None  # same shape as the targets
 
-    def _fit(self, dataset: Dataset):
-
-        assert isinstance(dataset, Dataset)
+    def _fit(self, dataset: Dataset | Sequence):
 
         # Type check to ensure dataset has __len__ method
         if not hasattr(dataset, "__len__"):
@@ -867,7 +866,7 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
             for param, value in norm_state.items():
                 setattr(norm, param, value)
 
-    def _fit(self, dataset: Dataset):
+    def _fit(self, dataset: Dataset | Sequence):
         """
         Fit all FeatNormalizers using the dataset.
 
@@ -875,10 +874,9 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
         FeatNormalizer with the values from its corresponding column.
 
         Args:
-            dataset: Dataset returning pairs (input, targets)
+            dataset: Dataset or sequence (e.g. a list) of pairs (input,
+                targets)
         """
-        assert isinstance(dataset, Dataset)
-
         if not hasattr(dataset, "__len__"):
             raise NotImplementedError("Dataset must implement __len__ method")
 
