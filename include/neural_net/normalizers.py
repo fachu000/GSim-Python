@@ -334,6 +334,9 @@ class DefaultNormalizer(Normalizer[InputType, OutputType, TargetType]):
 
     def _fit(self, dataset: Dataset | Sequence):
 
+        assert isinstance(dataset, (Dataset, Sequence)), \
+            "The dataset must be a torch Dataset or a sequence (e.g. a list)."
+
         # Type check to ensure dataset has __len__ method
         if not hasattr(dataset, "__len__"):
             raise NotImplementedError("Dataset must implement __len__ method")
@@ -877,6 +880,9 @@ class MultiFeatNormalizer(Normalizer[InputType, OutputType, TargetType]):
             dataset: Dataset or sequence (e.g. a list) of pairs (input,
                 targets)
         """
+        assert isinstance(dataset, (Dataset, Sequence)), \
+            "The dataset must be a torch Dataset or a sequence (e.g. a list)."
+
         if not hasattr(dataset, "__len__"):
             raise NotImplementedError("Dataset must implement __len__ method")
 
