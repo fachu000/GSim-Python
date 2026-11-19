@@ -18,6 +18,15 @@ def mean_and_ci(
     Uses Student-t if SciPy is available; otherwise falls back to a Gaussian
     (CLT) approximation using NumPy only.
 
+    Assumptions: the entries of `values` (or, if `weights` is provided, the
+    pairs (values[i], weights[i])) are independent and identically
+    distributed (i.i.d.). If they are not, e.g. because they are correlated,
+    the returned half-width may be wrong, typically too small. Even if they
+    are i.i.d., the CI is exact only for Gaussian values; otherwise, it is an
+    approximation that relies on the central limit theorem and improves as
+    the number of values grows. With weights, the delta-method linearization
+    adds a further approximation error.
+
     Args:
 
         values: array-like. Each entry is a sample of a random variable.
@@ -31,17 +40,18 @@ def mean_and_ci(
 
         is computed instead of the plain mean. The weighted mean is a ratio
         estimator; its CI half-width is obtained via the delta-method
-        (Taylor) linearization of the ratio, treating the pairs (values[i],
-        weights[i]) as i.i.d. With unit weights, this reduces exactly to the
-        unweighted case.
+        (Taylor) linearization of the ratio. With unit weights, this reduces
+        exactly to the unweighted case.
 
     Returns:
 
     sample_mean : float
 
     half_width : float
-        Half-width of the (1 - alpha) confidence interval. This means that
-        Prob(|sample_mean - true_mean| < half_width) = 1 - alpha.
+        Half-width of the (1 - alpha) confidence interval. Under the
+        assumptions above, this means that
+        Prob(|sample_mean - true_mean| < half_width) = 1 - alpha
+        (approximately, unless the values are Gaussian).
     """
     values = np.asarray(values, dtype=float)
     num_values = values.size

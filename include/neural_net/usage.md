@@ -205,11 +205,12 @@ Notes:
 
 - Returning a 1D tensor is equivalent to returning a `WeightedLoss` with unit
   weights.
-- The confidence intervals treat the (value, weight) pairs as i.i.d. When the
-  loss values of one example share a weight (e.g. `1/m` for an example with `m`
-  loss values), they are correlated and the reported CI is approximate. This
-  caveat already applies to the unweighted CI whenever an example produces
-  multiple loss values.
+- The confidence intervals assume that the (value, weight) pairs are i.i.d.
+  (see `mean_and_ci`). Whenever they are not, the reported CI is only
+  approximate. For example, the loss values of one example that produces
+  several loss values (and shares a weight such as `1/m` among its `m` loss
+  values) are typically correlated. This caveat also applies to the
+  unweighted CI.
 
 See `experiment_1011` in `neuralnet_experiments.py` for a complete worked
 example, where each example of `experiment_1010` (a small linear system with a

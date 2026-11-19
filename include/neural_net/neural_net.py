@@ -742,6 +742,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `metric`: the estimated value of the metric.
 
             `hci`: half-width of the confidence interval (CI) for the metric.
+            The CI is computed with `mean_and_ci`, which assumes that the loss
+            values are i.i.d. (cf. `usage.md`, Sec. "Weighted loss values").
 
         """
         dataset = dataloader.dataset
@@ -837,7 +839,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         values; cf. `usage.md`, Sec. "Weighted loss values".
 
         "hci": half-width of the (1 - alpha) confidence interval (CI) for the
-        loss, e.g. a 95% CI for `alpha=0.05` (the default).
+        loss, e.g. a 95% CI for `alpha=0.05` (the default). The CI assumes
+        that the loss values are i.i.d., e.g. that the examples of `dataset`
+        are drawn independently and each one produces a single loss value;
+        otherwise, it is only approximate. See `mean_and_ci`.
         """
         self._assert_initialized()
 
@@ -1649,7 +1654,9 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             `static_max_hci` (float | None): Maximum half-width of the
             confidence interval for static metric evaluations. If the half-width
             is below this threshold, the metric evaluation stops early, which
-            saves computation time.
+            saves computation time. The half-widths of these evaluations, which
+            are also printed in the log, assume that the loss values are
+            i.i.d.; see `evaluate`.
 
             `static_max_num_loss_vals` (int | None): Maximum number of loss
             values (each batch element contributes at least one loss value; cf.
