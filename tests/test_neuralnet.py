@@ -473,6 +473,37 @@ def test_fit_works_when_gradients_are_disabled():
     assert not torch.equal(t_weights_before, net.linear.weight)
 
 
+class _TrainableNetWithNormalizer(NeuralNet):
+    """Like _TrainableNet, but with a normalizer."""
+
+    def __init__(self):
+        super().__init__(normalizer=DefaultNormalizer(mode="both"))
+        self.linear = nn.Linear(4, 1)
+        self.initialize()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear(x)
+
+
+@pytest.mark.parametrize("net_class",
+                         [_TrainableNet, _TrainableNetWithNormalizer])
+def test_fit_accepts_a_list_of_examples(net_class):
+    """`fit` must accept a list of (input, target) pairs as `dataset` and
+    `dataset_val`, also when the normalizer is fitted on it."""
+    dataset = _TinyDataset()
+    l_examples = [dataset[ind] for ind in range(len(dataset))]
+    net = net_class()
+    t_weights_before = net.linear.weight.detach().clone()
+    net.fit(l_examples,
+            torch.optim.Adam(net.parameters(), lr=1e-2),
+            _mse,
+            dataset_val=l_examples[:10],
+            num_steps=4,
+            batch_size=5,
+            restore_best_checkpoint=False)
+    assert not torch.equal(t_weights_before, net.linear.weight)
+
+
 class TestFitStepIntervals:
     """End-to-end tests for resolve_fit_schedule logic inside NeuralNet.fit."""
 

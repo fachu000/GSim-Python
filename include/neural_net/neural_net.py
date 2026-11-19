@@ -9,7 +9,7 @@ import multiprocessing
 import warnings
 from filelock import FileLock
 from abc import ABC, abstractmethod
-from collections.abc import Sized
+from collections.abc import Sequence, Sized
 from typing import Any, Callable, Generic, List, Tuple, TypeVar, Union
 
 import numpy as np
@@ -1428,14 +1428,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
     # invoked by `predict` (as when a metanetwork fits a network per task).
     @torch.enable_grad()
     def fit(self,
-            dataset: Dataset,
+            dataset: Dataset | Sequence,
             optimizer: torch.optim.Optimizer,
             f_loss: LossFunType | None = None,
             lr_scheduler: _LRScheduler | LRScheduler | None = None,
             no_targets=False,
             num_epochs=None,
             num_steps=None,
-            dataset_val=None,
+            dataset_val: Dataset | Sequence | None = None,
             val_split=None,
             batch_size=32,
             batch_size_eval=None,
@@ -1508,7 +1508,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
               left from an earlier session does not stop the new one.
 
         Args:
-            `dataset` (Dataset): The training dataset.
+            `dataset` (Dataset | Sequence): The training dataset. A sequence (e.g.
+            a list) of examples is also accepted.
             
             `optimizer`: The optimizer to use. 
 
@@ -1547,8 +1548,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             passes) to perform. Exactly one of `num_epochs` and `num_steps` must
             be provided.
 
-            `dataset_val` (Dataset | None): The validation dataset. At most one
-            of `val_split` and `dataset_val` can be provided.
+            `dataset_val` (Dataset | Sequence | None): The validation dataset.
+            At most one of `val_split` and `dataset_val` can be provided.
 
             `val_split` (float | None): Fraction of the training data to use for
             validation. Default is None, which means validation is only
@@ -1691,6 +1692,13 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         Returns:
             TrainingHistory: An object containing the training history.
         """
+
+        # A sequence (e.g. a list) of examples is wrapped in a Dataset, as in
+        # `predict`.
+        if not isinstance(dataset, Dataset):
+            dataset = NeuralNet.NeuralNetDataset(dataset)
+        if dataset_val is not None and not isinstance(dataset_val, Dataset):
+            dataset_val = NeuralNet.NeuralNetDataset(dataset_val)
 
         def make_validation_data(dataset: Dataset, dataset_val,
                                  val_split) -> tuple[Dataset, Dataset | None]:
