@@ -809,7 +809,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  no_targets=False,
                  unnormalized=True,
                  max_hci=None,
-                 max_num_loss_vals=None):
+                 max_num_loss_vals=None,
+                 alpha: float = 0.05):
         """
         Args:
 
@@ -826,13 +827,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             whole dataset is processed once. For datasets without a length,
             either `max_num_loss_vals` or `max_hci` must be provided.
 
+            `alpha` (float): significance level of the confidence interval,
+            e.g. 0.05 (the default) for a 95% CI.
+
         Returns a dict with key-values:
 
         "loss": the result of averaging `f_loss` across `dataset`. If `f_loss`
         returns `WeightedLoss` objects, this is the weighted mean of the loss
         values; cf. `usage.md`, Sec. "Weighted loss values".
 
-        "hci": half-width of the confidence interval (CI) for the loss.
+        "hci": half-width of the (1 - alpha) confidence interval (CI) for the
+        loss, e.g. a 95% CI for `alpha=0.05` (the default).
         """
         self._assert_initialized()
 
@@ -851,7 +856,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             dataloader,
             f_loss=f_loss,
             max_hci=max_hci,
-            max_num_loss_vals=max_num_loss_vals)
+            max_num_loss_vals=max_num_loss_vals,
+            alpha=alpha)
         return {"loss": loss, "hci": hci}
 
     class NeuralNetDataset(Dataset):

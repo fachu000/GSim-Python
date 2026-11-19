@@ -504,6 +504,15 @@ def test_fit_accepts_a_list_of_examples(net_class):
     assert not torch.equal(t_weights_before, net.linear.weight)
 
 
+def test_evaluate_alpha_sets_the_confidence_level():
+    """A smaller `alpha` (higher confidence level) gives a wider CI."""
+    net = _TrainableNet()
+    d_95 = net.evaluate(_TinyDataset(), batch_size=5, f_loss=_mse)
+    d_99 = net.evaluate(_TinyDataset(), batch_size=5, f_loss=_mse, alpha=0.01)
+    assert d_99["loss"] == pytest.approx(d_95["loss"])
+    assert d_99["hci"] > d_95["hci"]
+
+
 class TestFitStepIntervals:
     """End-to-end tests for resolve_fit_schedule logic inside NeuralNet.fit."""
 
