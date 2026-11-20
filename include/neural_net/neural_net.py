@@ -20,7 +20,7 @@ from torch.utils.data import (DataLoader, Dataset, Subset, default_collate,
 from torch.optim.lr_scheduler import _LRScheduler, LRScheduler
 from tqdm import tqdm
 
-from ...include.utils.statistics import mean_and_ci
+from ...include.utils.statistics import mean_and_ci_clt
 
 from .datasets import (AdaptedDataset, AdaptedIterableDataset,
                        AdaptedSizedDataset, make_adapted_dataset)
@@ -33,7 +33,7 @@ def _seed_worker(worker_id):
     np.random.seed(seed)
 
 
-from .defs import InputType, OutputType, TargetType, LossFunType, WeightedLoss
+from .defs import CIFunType, InputType, OutputType, TargetType, LossFunType, WeightedLoss
 from ...gfigure import Subplot
 
 try:
@@ -715,37 +715,54 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         f_loss: LossFunType,
         max_hci=None,
         max_num_loss_vals=None,
-        alpha: float = 0.05,
+        f_ci: CIFunType | None = mean_and_ci_clt,
     ):
         """
-        Averages f_loss across the dataset. If `f_loss` returns `WeightedLoss`
-        objects, the weighted mean of the loss values is computed instead of the
-        plain mean; cf. `usage.md`, Sec. "Weighted loss values".
+        Averages the loss values that `f_loss` produces on the batches of
+        `dataloader` and computes a confidence interval (CI) for their mean. The
+        network weights are not changed.
 
         Args:
 
-            `f_loss`: LossFunType
+            `dataloader`: provides the batches. If its dataset has no length,
+            `max_hci` or `max_num_loss_vals` must be provided.
 
-            `max_hci`: if not None, the computation stops when the half-width of
-            the confidence interval (CI) is below this threshold.
+            `f_loss` (LossFunType): loss function, passed to `_get_loss`. If it
+            returns `WeightedLoss` objects, the weighted mean of the loss values
+            is computed instead of the plain mean; cf. `usage.md`, Sec.
+            "Weighted loss values".
 
-            `max_num_loss_vals`: if not None, the computation stops after this
-            many loss values (i.e., entries of the vector returned by
-            `_get_loss`) have been processed. If None and the dataset has a
-            length, the whole dataset is processed once. If both
-            `max_num_loss_vals` and `max_hci` are None and the dataset has no
-            length, a ValueError is raised.
+            `max_hci` (float | None): if not None, the evaluation stops as soon
+            as half the width of the CI is below this threshold. Requires
+            `f_ci`.
 
-            `alpha`: significance level for the CI (e.g. 0.05 for 95% CI)
+            `max_num_loss_vals` (int | None): if not None, the evaluation stops
+            after this many loss values (i.e., entries of the vector returned by
+            `_get_loss`) have been processed.
+
+            `f_ci` (CIFunType | None): function that computes the CI (see
+            `CIFunType` in `defs.py` for its signature). The default is
+            `mean_and_ci_clt`; see its docstring for the method and its
+            assumptions. If None, no CI is computed.
+
+        If neither `max_hci` nor `max_num_loss_vals` stops the evaluation, the
+        whole dataset is processed once (which requires a dataset with length).
+
+        If the loss values are not independent but dependent only within known
+        groups (e.g. the loss values of one example), this method can be
+        overridden to compute the CI with resampling over groups.
 
         Returns:
+
             `metric`: the estimated value of the metric.
 
-            `hci`: half-width of the confidence interval (CI) for the metric.
-            The CI is computed with `mean_and_ci`, which assumes that the loss
-            values are i.i.d. (cf. `usage.md`, Sec. "Weighted loss values").
-
+            `ci`: tuple (lower, upper) with the bounds of the CI for the metric,
+            or None if `f_ci` is None. The bounds are NaN if fewer than 2 loss
+            values are available.
         """
+        if max_hci is not None and f_ci is None:
+            raise ValueError("`max_hci` requires `f_ci`.")
+
         dataset = dataloader.dataset
         if (max_num_loss_vals is None and max_hci is None
                 and not isinstance(dataset, Sized)):
@@ -758,6 +775,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         # (the loop below stops on StopIteration). No count limit is imposed in
         # that case, so it works regardless of how many loss values each example
         # produces.
+        def compute_mean_and_ci(l_loss_vals, l_weights):
+            if f_ci is None:
+                return float(np.average(l_loss_vals, weights=l_weights)), None
+            return f_ci(l_loss_vals, l_weights)
+
         l_loss_vals = []
         l_weights = []
         num_batches = 0
@@ -781,28 +803,27 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             l_weights += v_weights.cpu().numpy().tolist()
 
             if max_hci is not None and len(l_loss_vals) >= 2:
-                mean, hci = mean_and_ci(l_loss_vals,
-                                        alpha=alpha,
-                                        weights=l_weights)
-                if hci <= max_hci:
+                mean, ci = compute_mean_and_ci(l_loss_vals, l_weights)
+                # Not None: `max_hci` requires `f_ci` (checked above).
+                assert ci is not None
+                if (ci[1] - ci[0]) / 2 <= max_hci:
                     gsim_logger.info(
                         f"    Target accuracy reached during metric evaluation after {num_batches} batches (used {len(l_loss_vals)} loss values)."
                     )
-                    return mean, hci
+                    return mean, ci
 
+        nan_ci = None if f_ci is None else (np.nan, np.nan)
         if len(l_loss_vals) == 0:
-            return np.nan, np.nan
+            return np.nan, nan_ci
         elif len(l_loss_vals) == 1:
-            return l_loss_vals[0], np.nan
+            return l_loss_vals[0], nan_ci
         else:
-            mean, hci = mean_and_ci(l_loss_vals,
-                                    alpha=alpha,
-                                    weights=l_weights)
+            mean, ci = compute_mean_and_ci(l_loss_vals, l_weights)
             if max_hci is not None:
                 gsim_logger.info(
                     f"    Target accuracy not reached during metric evaluation (used {num_batches} batches, {len(l_loss_vals)} loss values)."
                 )
-            return mean, hci
+            return mean, ci
 
     def evaluate(self,
                  dataset,
@@ -812,7 +833,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                  unnormalized=True,
                  max_hci=None,
                  max_num_loss_vals=None,
-                 alpha: float = 0.05):
+                 f_ci: CIFunType | None = mean_and_ci_clt):
         """
         Args:
 
@@ -829,8 +850,10 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             whole dataset is processed once. For datasets without a length,
             either `max_num_loss_vals` or `max_hci` must be provided.
 
-            `alpha` (float): significance level of the confidence interval,
-            e.g. 0.05 (the default) for a 95% CI.
+            `f_ci` (CIFunType | None): function that computes the confidence
+            interval (CI) of the loss (see `CIFunType` in `defs.py` for its
+            signature). The default is `mean_and_ci_clt`; see its docstring
+            for the method and its assumptions. If None, no CI is computed.
 
         Returns a dict with key-values:
 
@@ -838,11 +861,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
         returns `WeightedLoss` objects, this is the weighted mean of the loss
         values; cf. `usage.md`, Sec. "Weighted loss values".
 
-        "hci": half-width of the (1 - alpha) confidence interval (CI) for the
-        loss, e.g. a 95% CI for `alpha=0.05` (the default). The CI assumes
-        that the loss values are i.i.d., e.g. that the examples of `dataset`
-        are drawn independently and each one produces a single loss value;
-        otherwise, it is only approximate. See `mean_and_ci`.
+        "ci": tuple (lower, upper) with the bounds of the confidence interval
+        (CI) for the loss, as returned by `f_ci`, or None if `f_ci` is None. The
+        default CI assumes that the loss values are i.i.d., e.g. that the
+        examples of `dataset` are drawn independently and each one produces a
+        single loss value; otherwise, it is only approximate.
+
+        "hci": half of the width of the CI, i.e. its half-width if it is
+        symmetric, or None if `f_ci` is None.
         """
         self._assert_initialized()
 
@@ -857,13 +883,14 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                                            batch_size,
                                            no_targets=no_targets)
         self.eval()
-        loss, hci = self._eval_static_metric(
+        loss, ci = self._eval_static_metric(
             dataloader,
             f_loss=f_loss,
             max_hci=max_hci,
             max_num_loss_vals=max_num_loss_vals,
-            alpha=alpha)
-        return {"loss": loss, "hci": hci}
+            f_ci=f_ci)
+        hci = None if ci is None else (ci[1] - ci[0]) / 2
+        return {"loss": loss, "ci": ci, "hci": hci}
 
     class NeuralNetDataset(Dataset):
 
@@ -1465,6 +1492,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             eval_unnormalized_losses=False,
             unnormalized_max_hci=None,
             obtain_static_training_loss=False,
+            f_ci: CIFunType | None = mean_and_ci_clt,
             max_grad_norm: float | None = None,
             min_num_loss_vals_accumulate_grad: int | None = None,
             live_plot=False,
@@ -1519,8 +1547,7 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
               left from an earlier session does not stop the new one.
 
         Args:
-            `dataset` (Dataset | Sequence): The training dataset. A sequence (e.g.
-            a list) of examples is also accepted.
+            `dataset` (Dataset | Sequence): The training dataset. 
             
             `optimizer`: The optimizer to use. 
 
@@ -1655,8 +1682,8 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             confidence interval for static metric evaluations. If the half-width
             is below this threshold, the metric evaluation stops early, which
             saves computation time. The half-widths of these evaluations, which
-            are also printed in the log, assume that the loss values are
-            i.i.d.; see `evaluate`.
+            are also printed in the log, assume that the loss values are i.i.d.;
+            see `evaluate`.
 
             `static_max_num_loss_vals` (int | None): Maximum number of loss
             values (each batch element contributes at least one loss value; cf.
@@ -1676,6 +1703,13 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             computed for fixed network weights every `num_steps_eval` steps.
             This allows one to see the training loss without the gradient noise.
             Default is False.
+
+            `f_ci` (CIFunType | None): function that computes the confidence
+            interval (CI) of the static loss evaluations (static training loss,
+            validation loss, and unnormalized variants), printed in the log (see
+            `CIFunType` in `defs.py` for its signature). The default is
+            `mean_and_ci_clt`; see its docstring for the method and its
+            assumptions. If None, no CI is computed.
 
             `max_grad_norm` (float | None): If provided, gradients are clipped
             to have maximum norm `max_grad_norm` during training.
@@ -1712,6 +1746,11 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             dataset = NeuralNet.NeuralNetDataset(dataset)
         if dataset_val is not None and not isinstance(dataset_val, Dataset):
             dataset_val = NeuralNet.NeuralNetDataset(dataset_val)
+
+        if f_ci is None and (static_max_hci is not None
+                             or unnormalized_max_hci is not None):
+            raise ValueError(
+                "`static_max_hci` and `unnormalized_max_hci` require `f_ci`.")
 
         def make_validation_data(dataset: Dataset, dataset_val,
                                  val_split) -> tuple[Dataset, Dataset | None]:
@@ -1873,12 +1912,17 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
                 )
 
         def get_log_loss_str(l_loss,
-                             hci=None,
+                             ci=None,
                              min_step_for_declaring_best=None):
             l_vals = [t[1] for t in l_loss]
-            str_val = f"{l_vals[-1]:.{num_significant_figures}g}"
-            if hci is not None:
-                str_val += f" ± {hci:.{num_significant_figures}g}"
+            nsf = num_significant_figures
+            str_val = f"{l_vals[-1]:.{nsf}g}"
+            if ci is not None:
+                lower, upper = ci
+                if np.isclose(upper - l_vals[-1], l_vals[-1] - lower):
+                    str_val += f" ± {(upper - lower) / 2:.{nsf}g}"
+                else:
+                    str_val += f" (CI [{lower:.{nsf}g}, {upper:.{nsf}g}])"
             if min_step_for_declaring_best is not None:
                 if l_loss[-1][0] < min_step_for_declaring_best:
                     return str_val
@@ -1958,52 +2002,56 @@ class NeuralNet(nn.Module, Generic[InputType, OutputType, TargetType], ABC):
             if obtain_static_training_loss:
                 gsim_logger.info(
                     "│ Computing the static estimate of the training loss...")
-                m, hci = self._eval_static_metric(
+                m, ci = self._eval_static_metric(
                     dataloader_train_eval,
                     f_loss,
                     max_hci=static_max_hci,
-                    max_num_loss_vals=static_max_num_loss_vals)
+                    max_num_loss_vals=static_max_num_loss_vals,
+                    f_ci=f_ci)
                 hist.l_train_loss += [(ind_step, m)]
                 l_str_log.append("train loss = " +
-                                 get_log_loss_str(hist.l_train_loss, hci))
+                                 get_log_loss_str(hist.l_train_loss, ci))
             if dataloader_val is not None:
                 gsim_logger.info("│ Computing the validation loss...")
-                m, hci = self._eval_static_metric(
+                m, ci = self._eval_static_metric(
                     dataloader_val,
                     f_loss,
                     max_hci=static_max_hci,
-                    max_num_loss_vals=static_max_num_loss_vals)
+                    max_num_loss_vals=static_max_num_loss_vals,
+                    f_ci=f_ci)
                 hist.l_val_loss += [(ind_step, m)]
                 l_str_log.append("val loss = " +
-                                 get_log_loss_str(hist.l_val_loss, hci))
+                                 get_log_loss_str(hist.l_val_loss, ci))
                 if keep_best_val_weights:
                     save_weights_if_best_val(hist)
             if eval_unnormalized_losses and self.normalizer is not None:
                 gsim_logger.info(
                     "│ Computing the static estimate of the unnormalized training loss..."
                 )
-                m, hci = self._eval_static_metric(
+                m, ci = self._eval_static_metric(
                     dataloader_train_eval,
                     self.make_unnormalized_loss(f_loss),
                     max_hci=unnormalized_max_hci,
-                    max_num_loss_vals=static_max_num_loss_vals)
+                    max_num_loss_vals=static_max_num_loss_vals,
+                    f_ci=f_ci)
                 hist.l_unnormalized_train_loss += [(ind_step, m)]
                 l_str_log.append(
                     "unnormalized train loss = " +
-                    get_log_loss_str(hist.l_unnormalized_train_loss, hci))
+                    get_log_loss_str(hist.l_unnormalized_train_loss, ci))
             if eval_unnormalized_losses and self.normalizer is not None and val:
                 gsim_logger.info(
                     "│ Computing the static estimate of the unnormalized validation loss..."
                 )
-                m, hci = self._eval_static_metric(
+                m, ci = self._eval_static_metric(
                     dataloader_val,
                     self.make_unnormalized_loss(f_loss),
                     max_hci=unnormalized_max_hci,
-                    max_num_loss_vals=static_max_num_loss_vals)
+                    max_num_loss_vals=static_max_num_loss_vals,
+                    f_ci=f_ci)
                 hist.l_unnormalized_val_loss += [(ind_step, m)]
                 l_str_log.append(
                     "unnormalized val loss = " +
-                    get_log_loss_str(hist.l_unnormalized_val_loss, hci))
+                    get_log_loss_str(hist.l_unnormalized_val_loss, ci))
             gsim_logger.info(f"│ ")
             gsim_logger.info(f"│ Results: ")
             for s in l_str_log:

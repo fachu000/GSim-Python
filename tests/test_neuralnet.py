@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import pickle
@@ -11,7 +12,7 @@ from torch.utils.data import Dataset, IterableDataset
 from gsim.include.neural_net import NeuralNet, WeightedLoss
 from gsim.include.neural_net.neural_net import TrainingHistory
 from gsim.include.neural_net.normalizers import DefaultNormalizer
-from gsim.include.utils.statistics import mean_and_ci
+from gsim.include.utils.statistics import mean_and_ci_clt
 
 
 # Helper network definitions (defined at module level to be picklable)
@@ -504,13 +505,45 @@ def test_fit_accepts_a_list_of_examples(net_class):
     assert not torch.equal(t_weights_before, net.linear.weight)
 
 
-def test_evaluate_alpha_sets_the_confidence_level():
-    """A smaller `alpha` (higher confidence level) gives a wider CI."""
+def test_evaluate_f_ci_sets_the_confidence_interval():
+    """`f_ci` sets how the CI is computed; None disables it."""
     net = _TrainableNet()
     d_95 = net.evaluate(_TinyDataset(), batch_size=5, f_loss=_mse)
-    d_99 = net.evaluate(_TinyDataset(), batch_size=5, f_loss=_mse, alpha=0.01)
+    lower, upper = d_95["ci"]
+    assert lower < d_95["loss"] < upper
+    assert d_95["hci"] == pytest.approx((upper - lower) / 2)
+
+    # A higher confidence level gives a wider CI.
+    d_99 = net.evaluate(_TinyDataset(),
+                        batch_size=5,
+                        f_loss=_mse,
+                        f_ci=functools.partial(mean_and_ci_clt, alpha=0.01))
     assert d_99["loss"] == pytest.approx(d_95["loss"])
     assert d_99["hci"] > d_95["hci"]
+
+    # An asymmetric CI is returned as is.
+    def f_ci_asymmetric(values, weights):
+        mean = float(np.average(values, weights=weights))
+        return mean, (mean - 1.0, mean + 3.0)
+
+    d_asym = net.evaluate(_TinyDataset(),
+                          batch_size=5,
+                          f_loss=_mse,
+                          f_ci=f_ci_asymmetric)
+    assert d_asym["ci"] == pytest.approx(
+        (d_95["loss"] - 1.0, d_95["loss"] + 3.0))
+    assert d_asym["hci"] == pytest.approx(2.0)
+
+    # No CI.
+    d_none = net.evaluate(_TinyDataset(), batch_size=5, f_loss=_mse, f_ci=None)
+    assert d_none["loss"] == pytest.approx(d_95["loss"])
+    assert d_none["ci"] is None and d_none["hci"] is None
+    with pytest.raises(ValueError):
+        net.evaluate(_TinyDataset(),
+                     batch_size=5,
+                     f_loss=_mse,
+                     f_ci=None,
+                     max_hci=0.1)
 
 
 class TestFitStepIntervals:
@@ -1225,24 +1258,6 @@ class TestLossShapeValidation:
         net = self._make_net()
         with pytest.raises(AssertionError, match="1D tensor"):
             net.evaluate(_TinyDataset(), batch_size=5, f_loss=f_loss_scalar)
-
-
-def test_mean_and_ci_unit_weights_matches_unweighted():
-    """mean_and_ci with unit weights must reduce exactly to the unweighted
-    case."""
-    l_vals = [1.0, 2.0, 3.0, 10.0]
-    mean_unweighted, hci_unweighted = mean_and_ci(l_vals)
-    mean_weighted, hci_weighted = mean_and_ci(l_vals, weights=[1.0] * 4)
-    assert np.isclose(mean_unweighted, mean_weighted)
-    assert np.isclose(hci_unweighted, hci_weighted)
-
-
-def test_mean_and_ci_weighted_mean():
-    l_vals = [1.0, 2.0, 3.0, 4.0]
-    l_weights = [1.0, 1.0, 1.0, 7.0]
-    mean, hci = mean_and_ci(l_vals, weights=l_weights)
-    assert np.isclose(mean, 3.4)
-    assert np.isfinite(hci)
 
 
 # Tests for import_parameters ##################################################

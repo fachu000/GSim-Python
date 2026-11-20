@@ -65,3 +65,12 @@ class WeightedLoss(NamedTuple):
 
 LossFunType = Callable[[OutputType, TargetType], Union[torch.Tensor,
                                                        WeightedLoss]]
+
+# Type of the functions that compute the confidence interval (CI) of a loss,
+# e.g. the argument `f_ci` of `NeuralNet.fit` and `NeuralNet.evaluate`. Such a
+# function is called as `f_ci(values, weights)`, where `values` and `weights`
+# are lists with the loss values and their weights (cf. `WeightedLoss`), and
+# must return a tuple `(mean, (lower, upper))` with the (weighted) mean of the
+# loss values and the bounds of its CI.
+CIFunType = Callable[[list[float], list[float]], tuple[float, tuple[float,
+                                                                    float]]]
