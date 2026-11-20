@@ -2060,28 +2060,31 @@ def plot_example_figure(ind_example):
 
     elif ind_example == 18:
         if __package__:
-            from .include.utils.statistics import mean_and_ci
+            from .include.utils.statistics import mean_and_ci_clt
         else:
-            from include.utils.statistics import mean_and_ci
+            from include.utils.statistics import mean_and_ci_clt
 
         # Running averages of one realization of constant + Gaussian noise.
         max_num_samples = 200
         true_mean = 2.0
         noise_std = 1.0
         rng = np.random.default_rng(0)
-        # mean_and_ci requires at least two samples to estimate the variance.
+        # mean_and_ci_clt requires at least two samples to estimate the variance.
         v_num_samples = np.arange(2, max_num_samples + 1)
         v_samples = true_mean + rng.normal(scale=noise_std,
                                           size=max_num_samples)
         # Compute the mean and 95% CI for each prefix of the same realization.
-        v_mean, v_half_width = np.array([
-            mean_and_ci(v_samples[:num_samples])
+        l_mean_and_ci = [
+            mean_and_ci_clt(v_samples[:num_samples])
             for num_samples in v_num_samples
-        ]).T
+        ]
+        v_mean = np.array([mean for mean, _ in l_mean_and_ci])
+        v_lower = np.array([lower for _, (lower, _) in l_mean_and_ci])
+        v_upper = np.array([upper for _, (_, upper) in l_mean_and_ci])
         G = GFigure(xaxis=v_num_samples,
                     yaxis=v_mean,
-                    ylower=v_mean - v_half_width,
-                    yupper=v_mean + v_half_width,
+                    ylower=v_lower,
+                    yupper=v_upper,
                     xlabel='Number of samples N',
                     ylabel='Estimated constant',
                     title='Average of noisy observations of a constant and CI error bands',

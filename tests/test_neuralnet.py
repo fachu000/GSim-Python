@@ -1,3 +1,4 @@
+import functools
 import logging
 import os
 import pickle
@@ -11,7 +12,7 @@ from torch.utils.data import Dataset, IterableDataset
 from gsim.include.neural_net import NeuralNet, WeightedLoss
 from gsim.include.neural_net.neural_net import TrainingHistory
 from gsim.include.neural_net.normalizers import DefaultNormalizer
-from gsim.include.utils.statistics import mean_and_ci
+from gsim.include.utils.statistics import mean_and_ci_clt
 
 
 # Helper network definitions (defined at module level to be picklable)
@@ -456,6 +457,93 @@ class _IterableDataset(IterableDataset):
 def _mse(output, target):
     """Per-example MSE: shape (batch_size,)."""
     return ((output - target)**2).squeeze(-1)
+
+
+def test_fit_works_when_gradients_are_disabled():
+    """`fit` must train even if called with gradients disabled, e.g. from the
+    `forward` of another network invoked by `predict`."""
+    net = _TrainableNet()
+    t_weights_before = net.linear.weight.detach().clone()
+    with torch.no_grad():
+        net.fit(_TinyDataset(),
+                torch.optim.Adam(net.parameters(), lr=1e-2),
+                _mse,
+                num_steps=4,
+                batch_size=5,
+                restore_best_checkpoint=False)
+    assert not torch.equal(t_weights_before, net.linear.weight)
+
+
+class _TrainableNetWithNormalizer(NeuralNet):
+    """Like _TrainableNet, but with a normalizer."""
+
+    def __init__(self):
+        super().__init__(normalizer=DefaultNormalizer(mode="both"))
+        self.linear = nn.Linear(4, 1)
+        self.initialize()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.linear(x)
+
+
+@pytest.mark.parametrize("net_class",
+                         [_TrainableNet, _TrainableNetWithNormalizer])
+def test_fit_accepts_a_list_of_examples(net_class):
+    """`fit` must accept a list of (input, target) pairs as `dataset` and
+    `dataset_val`, also when the normalizer is fitted on it."""
+    dataset = _TinyDataset()
+    l_examples = [dataset[ind] for ind in range(len(dataset))]
+    net = net_class()
+    t_weights_before = net.linear.weight.detach().clone()
+    net.fit(l_examples,
+            torch.optim.Adam(net.parameters(), lr=1e-2),
+            _mse,
+            dataset_val=l_examples[:10],
+            num_steps=4,
+            batch_size=5,
+            restore_best_checkpoint=False)
+    assert not torch.equal(t_weights_before, net.linear.weight)
+
+
+def test_evaluate_f_ci_sets_the_confidence_interval():
+    """`f_ci` sets how the CI is computed; None disables it."""
+    net = _TrainableNet()
+    d_95 = net.evaluate(_TinyDataset(), batch_size=5, f_loss=_mse)
+    lower, upper = d_95["ci"]
+    assert lower < d_95["loss"] < upper
+    assert d_95["hci"] == pytest.approx((upper - lower) / 2)
+
+    # A higher confidence level gives a wider CI.
+    d_99 = net.evaluate(_TinyDataset(),
+                        batch_size=5,
+                        f_loss=_mse,
+                        f_ci=functools.partial(mean_and_ci_clt, alpha=0.01))
+    assert d_99["loss"] == pytest.approx(d_95["loss"])
+    assert d_99["hci"] > d_95["hci"]
+
+    # An asymmetric CI is returned as is.
+    def f_ci_asymmetric(values, weights):
+        mean = float(np.average(values, weights=weights))
+        return mean, (mean - 1.0, mean + 3.0)
+
+    d_asym = net.evaluate(_TinyDataset(),
+                          batch_size=5,
+                          f_loss=_mse,
+                          f_ci=f_ci_asymmetric)
+    assert d_asym["ci"] == pytest.approx(
+        (d_95["loss"] - 1.0, d_95["loss"] + 3.0))
+    assert d_asym["hci"] == pytest.approx(2.0)
+
+    # No CI.
+    d_none = net.evaluate(_TinyDataset(), batch_size=5, f_loss=_mse, f_ci=None)
+    assert d_none["loss"] == pytest.approx(d_95["loss"])
+    assert d_none["ci"] is None and d_none["hci"] is None
+    with pytest.raises(ValueError):
+        net.evaluate(_TinyDataset(),
+                     batch_size=5,
+                     f_loss=_mse,
+                     f_ci=None,
+                     max_hci=0.1)
 
 
 class TestFitStepIntervals:
@@ -1172,24 +1260,6 @@ class TestLossShapeValidation:
             net.evaluate(_TinyDataset(), batch_size=5, f_loss=f_loss_scalar)
 
 
-def test_mean_and_ci_unit_weights_matches_unweighted():
-    """mean_and_ci with unit weights must reduce exactly to the unweighted
-    case."""
-    l_vals = [1.0, 2.0, 3.0, 10.0]
-    mean_unweighted, hci_unweighted = mean_and_ci(l_vals)
-    mean_weighted, hci_weighted = mean_and_ci(l_vals, weights=[1.0] * 4)
-    assert np.isclose(mean_unweighted, mean_weighted)
-    assert np.isclose(hci_unweighted, hci_weighted)
-
-
-def test_mean_and_ci_weighted_mean():
-    l_vals = [1.0, 2.0, 3.0, 4.0]
-    l_weights = [1.0, 1.0, 1.0, 7.0]
-    mean, hci = mean_and_ci(l_vals, weights=l_weights)
-    assert np.isclose(mean, 3.4)
-    assert np.isfinite(hci)
-
-
 # Tests for import_parameters ##################################################
 
 
@@ -1524,8 +1594,8 @@ class TestCheckpointAtStepZero:
         # weights.pth holds the weights that the step-0 evaluation measured.
         saved = _TrainableNet(nn_folder=str(tmp_path))
         _, dataset_val = self._make_datasets()
-        with torch.no_grad():
-            val_loss = _mse(saved(dataset_val.x), dataset_val.y).mean()
+        m_pred = saved.predict(dataset_val.x, output_class=torch.Tensor)
+        val_loss = _mse(m_pred, dataset_val.y).mean()
         assert np.isclose(val_loss.item(), hist.l_val_loss[0][1], rtol=1e-5)
 
         # The moving estimate is still not reported at step 0.
