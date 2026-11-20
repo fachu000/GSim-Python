@@ -1579,8 +1579,8 @@ class TestCheckpointAtStepZero:
         # weights.pth holds the weights that the step-0 evaluation measured.
         saved = _TrainableNet(nn_folder=str(tmp_path))
         _, dataset_val = self._make_datasets()
-        with torch.no_grad():
-            val_loss = _mse(saved(dataset_val.x), dataset_val.y).mean()
+        m_pred = saved.predict(dataset_val.x, output_class=torch.Tensor)
+        val_loss = _mse(m_pred, dataset_val.y).mean()
         assert np.isclose(val_loss.item(), hist.l_val_loss[0][1], rtol=1e-5)
 
         # The moving estimate is still not reported at step 0.
